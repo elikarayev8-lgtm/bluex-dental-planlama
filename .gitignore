@@ -1,0 +1,20 @@
+# Hasta verisi / kişisel/bilgisayara özel ayarlar — ASLA commit edilmez
+hastalar.json
+ayarlar.json
+database.txt
+debug_output.txt
+HastaYedekleri/
+dcm_cache/
+base/
+
+# Derleme çıktıları (Release'e ayrı yüklenir, git geçmişine gömülmez)
+build/
+dist/
+installer/*.exe
+__pycache__/
+*.pyc
+
+# Kullanılmayan eski dosyalar
+dental_planlama_backup_*.py
+planlama.py
+screen.py
