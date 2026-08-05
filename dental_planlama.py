@@ -391,6 +391,23 @@ def _sb_timeout_for(data_bytes):
         return 15
     return max(15, min(300, data_bytes // (80 * 1024)))
 
+_SSL_BAGLAM_CACHE = {}
+
+def ssl_baglam():
+    """HTTPS sorğuları üçün SSL konteksti — Windows-un öz sertifikat mağazasında
+    bəzən lazımi ARA-sertifikat olmur (brauzer bunu ilk ehtiyac olanda özü
+    avtomatik yükləyib keşləyir, Python isə YOX) — bu, brauzerdə hər şey
+    normal görünərkən Python-da "certificate verify failed" xətasına səbəb
+    olur (tanınmış Windows+Python problemi). `certifi`-nin öz-özünə kifayət
+    edən CA bundle-ı bunu keçir; certifi mövcud deyilsə sistem defoltuna düşür."""
+    if "ctx" not in _SSL_BAGLAM_CACHE:
+        try:
+            import certifi, ssl
+            _SSL_BAGLAM_CACHE["ctx"] = ssl.create_default_context(cafile=certifi.where())
+        except Exception:
+            _SSL_BAGLAM_CACHE["ctx"] = None
+    return _SSL_BAGLAM_CACHE["ctx"]
+
 def _sb_http(method, path, body=None, token=None, extra_headers=None, timeout=None):
     import urllib.request, urllib.error, socket
     if not cloud_configured():
@@ -414,7 +431,7 @@ def _sb_http(method, path, body=None, token=None, extra_headers=None, timeout=No
     prev_timeout = socket.getdefaulttimeout()
     socket.setdefaulttimeout(timeout)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout, context=ssl_baglam()) as resp:
             raw = resp.read()
             return json.loads(raw) if raw else {}
     except urllib.error.HTTPError as e:
@@ -447,7 +464,7 @@ def sb_refresh(refresh_token):
 # `app_surumler` tablosunda (bulud, herkese açık okunabilir) en son sürüm
 # satırını okur; installer/supabase_surum_schema.sql ile kurulur. Yeni sürüm
 # yayınlanırken bu tabloya tek bir satır eklenir (surum, indirme_url, notlar).
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.2.1"
 
 def _ver_tuple(s):
     parcalar = []
@@ -4606,7 +4623,7 @@ class DentalApp(ctk.CTk):
             try:
                 tmp_path = os.path.join(tempfile.gettempdir(), "BlueXDental_Setup_update.exe")
                 req = urllib.request.Request(url, headers={"User-Agent": "BlueXDental-Updater"})
-                with urllib.request.urlopen(req, timeout=30) as resp, open(tmp_path, "wb") as f:
+                with urllib.request.urlopen(req, timeout=30, context=ssl_baglam()) as resp, open(tmp_path, "wb") as f:
                     total = resp.length or 0
                     okunan = 0
                     while True:
