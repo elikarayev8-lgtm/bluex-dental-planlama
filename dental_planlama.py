@@ -447,7 +447,7 @@ def sb_refresh(refresh_token):
 # `app_surumler` tablosunda (bulud, herkese açık okunabilir) en son sürüm
 # satırını okur; installer/supabase_surum_schema.sql ile kurulur. Yeni sürüm
 # yayınlanırken bu tabloya tek bir satır eklenir (surum, indirme_url, notlar).
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 
 def _ver_tuple(s):
     parcalar = []
