@@ -1,6 +1,7 @@
 # Hasta verisi / kişisel/bilgisayara özel ayarlar — ASLA commit edilmez
 hastalar.json
 ayarlar.json
+randevular.json
 database.txt
 debug_output.txt
 HastaYedekleri/

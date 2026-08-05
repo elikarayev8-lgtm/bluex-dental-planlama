@@ -3,8 +3,8 @@ import customtkinter as ctk
 import tkinter as tk
 from PIL import Image, ImageDraw, ImageTk, ImageFilter, ImageFont, ImageChops
 from io import BytesIO
-import json, os, math, base64, numpy as np, threading, queue, time, uuid
-from datetime import datetime
+import json, os, math, base64, numpy as np, threading, queue, time, uuid, copy
+from datetime import datetime, date, timedelta
 
 # ── X-ray folder watcher (watchdog) ─────────────────────────────────────────
 try:
@@ -79,6 +79,257 @@ def ayar_kaydet(a):
         print(f"[Ayar] kaydedilemedi: {e}")
 
 AYARLAR = ayar_yukle()
+
+# ── Randevu Təqvimi (hastalardan bağımsız, ayrı dosya) ───────────────────────
+RANDEVU_FILE = os.path.join(os.path.dirname(DATA_FILE), "randevular.json")
+
+def randevu_yukle():
+    try:
+        with open(RANDEVU_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def randevu_kaydet(r):
+    try:
+        os.makedirs(os.path.dirname(RANDEVU_FILE) or ".", exist_ok=True)
+        with open(RANDEVU_FILE, "w", encoding="utf-8") as f:
+            json.dump(r, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"[Randevu] kaydedilemedi: {e}")
+
+RANDEVU_STATUS = [
+    ("gozleyir", "Gözləyir",     "#2563EB"),
+    ("geldi",    "Gəldi",        "#0E9F6E"),
+    ("gelmedi",  "Gəlmədi",      "#C0392B"),
+    ("legv",     "Ləğv edildi",  "#8A94A6"),
+]
+RANDEVU_STATUS_LBL = {k: l for k, l, _ in RANDEVU_STATUS}
+RANDEVU_STATUS_RENK = {k: c for k, _, c in RANDEVU_STATUS}
+RANDEVU_STATUS_KEY = {l: k for k, l, _ in RANDEVU_STATUS}
+
+RANDEVU_SAAT_BASI = 8     # təqvim cədvəli 08:00-dan başlayır
+RANDEVU_SAAT_SONU = 22    # ...22:00-a qədər
+RANDEVU_SAAT_PX   = 50    # bir saatlıq sətrin piksel hündürlüyü
+RANDEVU_MUDDETLER = [15, 30, 45, 60, 90, 120]   # dəqiqə seçimləri
+
+def randevu_renk(status_key):
+    """İstifadəçi Ayarlar'dan rəngi dəyişibsə onu, yoxsa defolt rəngi qaytarır."""
+    ozel = AYARLAR.get("randevu_renkler", {})
+    return ozel.get(status_key) or RANDEVU_STATUS_RENK.get(status_key, "#2563EB")
+
+# ── Dil paketi (EN / RU / TR) — Azərbaycan mətni əsas götürülür ─────────────
+CURRENT_LANG = AYARLAR.get("dil", "az")
+
+TRANSLATIONS = {
+    "+  Yeni Pasient": {"en": "+  New Patient", "ru": "+  Новый пациент", "tr": "+  Yeni Hasta"},
+    "+ Foto Əlavə Et": {"en": "+ Add Photo", "ru": "+ Добавить фото", "tr": "+ Foto Ekle"},
+    "+ Qeyd Əlavə Et": {"en": "+ Add Note", "ru": "+ Добавить запись", "tr": "+ Not Ekle"},
+    "+ Rentgen Əlavə Et": {"en": "+ Add X-Ray", "ru": "+ Добавить рентген", "tr": "+ Röntgen Ekle"},
+    "+ Yeni Randevu": {"en": "+ New Appointment", "ru": "+ Новая запись", "tr": "+ Yeni Randevu"},
+    "Ada görə axtar…": {"en": "Search by name…", "ru": "Поиск по имени…", "tr": "İsme göre ara…"},
+    "Ayarlar": {"en": "Settings", "ru": "Настройки", "tr": "Ayarlar"},
+    "BULUDDAKI HASTALAR": {"en": "PATIENTS IN CLOUD", "ru": "ПАЦИЕНТЫ В ОБЛАКЕ", "tr": "BULUTTAKİ HASTALAR"},
+    "Bağlantı Hatası": {"en": "Connection Error", "ru": "Ошибка подключения", "tr": "Bağlantı Hatası"},
+    "Bu Həftə": {"en": "This Week", "ru": "Эта неделя", "tr": "Bu Hafta"},
+    "Bu fotoğrafı silmek istədiyinizə əminsiniz?": {"en": "Are you sure you want to delete this photo?", "ru": "Вы уверены, что хотите удалить это фото?", "tr": "Bu fotoğrafı silmek istediğinize emin misiniz?"},
+    "Bu geçerli bir .bxd hasta dosyası değil.": {"en": "This is not a valid .bxd patient file.", "ru": "Это недопустимый файл пациента .bxd.", "tr": "Bu geçerli bir .bxd hasta dosyası değil."},
+    "Bu randevunu silmək istədiyinizə əminsiniz?": {"en": "Are you sure you want to delete this appointment?", "ru": "Вы уверены, что хотите удалить эту запись?", "tr": "Bu randevuyu silmek istediğinize emin misiniz?"},
+    "Bu röntgeni silmek istədiyinizə əminsiniz?": {"en": "Are you sure you want to delete this X-ray?", "ru": "Вы уверены, что хотите удалить этот снимок?", "tr": "Bu röntgeni silmek istediğinize emin misiniz?"},
+    "Bu xəstə gəldi kimi qeyd edilsin?": {"en": "Mark this patient as arrived?", "ru": "Отметить пациента как прибывшего?", "tr": "Bu hasta geldi olarak işaretlensin mi?"},
+    "Bulud": {"en": "Cloud", "ru": "Облако", "tr": "Bulut"},
+    "Bulud sunucusu hələ qurulmayıb — proqram yalnız yerel işləyir.": {"en": "Cloud server not set up yet — the app only works locally.", "ru": "Облачный сервер ещё не настроен — программа работает только локально.", "tr": "Bulut sunucusu henüz kurulmamış — program yalnızca yerel çalışıyor."},
+    "Buludda hasta tapılmadı.": {"en": "No patient found in the cloud.", "ru": "Пациент не найден в облаке.", "tr": "Bulutta hasta bulunamadı."},
+    "Buluddakı verilər yerel verilərin üzərinə yazılacaq (hər iki tərəfdə eyni hasta varsa buludtakı qalacaq).\n\nDavam edilsin?": {
+        "en": "Cloud data will overwrite local data (if the same patient exists on both sides, the cloud version stays).\n\nContinue?",
+        "ru": "Облачные данные перезапишут локальные (если пациент есть с обеих сторон, останется облачная версия).\n\nПродолжить?",
+        "tr": "Buluttaki veriler yerel verilerin üzerine yazılacak (her iki tarafta aynı hasta varsa buluttaki kalacak).\n\nDevam edilsin mi?"},
+    "Buluddan Hasta Seç": {"en": "Select Patient from Cloud", "ru": "Выбрать пациента из облака", "tr": "Buluttan Hasta Seç"},
+    "Daha Sonra": {"en": "Later", "ru": "Позже", "tr": "Daha Sonra"},
+    "Defolt Rənglərə Sıfırla": {"en": "Reset to Default Colors", "ru": "Сбросить к цветам по умолчанию", "tr": "Varsayılan Renklere Sıfırla"},
+    "Dental Tedavi Planlama": {"en": "Dental Treatment Planning", "ru": "Планирование стоматологического лечения", "tr": "Dental Tedavi Planlama"},
+    "E-poçt": {"en": "Email", "ru": "Эл. почта", "tr": "E-posta"},
+    "Foto yoxdur": {"en": "No photo", "ru": "Нет фото", "tr": "Foto yok"},
+    "Geçersiz Dosya": {"en": "Invalid File", "ru": "Недопустимый файл", "tr": "Geçersiz Dosya"},
+    "Giriş Et": {"en": "Log In", "ru": "Войти", "tr": "Giriş Yap"},
+    "Güncelleme Kontrolü": {"en": "Update Check", "ru": "Проверка обновлений", "tr": "Güncelleme Kontrolü"},
+    "HASTA": {"en": "PATIENT", "ru": "ПАЦИЕНТ", "tr": "HASTA"},
+    "Haqqında": {"en": "About", "ru": "О программе", "tr": "Hakkında"},
+    "Hastayı Sil": {"en": "Delete Patient", "ru": "Удалить пациента", "tr": "Hastayı Sil"},
+    "Hastayı Kaydet": {"en": "Save Patient", "ru": "Сохранить пациента", "tr": "Hastayı Kaydet"},
+    "Hata": {"en": "Error", "ru": "Ошибка", "tr": "Hata"},
+    "Header-də \"Tedaviyə Keç / VR Düzenle / Layout Kaydet\" düymələrini göstər": {
+        "en": "Show \"Go to Treatment / Edit VR / Save Layout\" buttons in the header",
+        "ru": "Показывать кнопки «Перейти к лечению / Редактор VR / Сохранить макет» в шапке",
+        "tr": "Header'da \"Tedaviye Geç / VR Düzenle / Layout Kaydet\" butonlarını göster"},
+    "Hekim hesabı ilə giriş edin — eyni hesabla giriş edilən bütün\nkompüterlər hasta verilərini avtomatik paylaşır.": {
+        "en": "Log in with your doctor account — all computers logged in\nwith the same account automatically share patient data.",
+        "ru": "Войдите под учётной записью врача — все компьютеры,\nвошедшие под одной учётной записью, автоматически делятся данными пациентов.",
+        "tr": "Hekim hesabınızla giriş yapın — aynı hesapla giriş yapan tüm\nbilgisayarlar hasta verilerini otomatik olarak paylaşır."},
+    "Henüz röntgen eklenmedi": {"en": "No X-ray added yet", "ru": "Ещё не добавлен рентген-снимок", "tr": "Henüz röntgen eklenmedi"},
+    "Hesab Yarat": {"en": "Create Account", "ru": "Создать аккаунт", "tr": "Hesap Oluştur"},
+    "Kaydedildi": {"en": "Saved", "ru": "Сохранено", "tr": "Kaydedildi"},
+    "Layout Kaydedildi": {"en": "Layout Saved", "ru": "Макет сохранён", "tr": "Layout Kaydedildi"},
+    "Layout Kaydet (VR)": {"en": "Save Layout (VR)", "ru": "Сохранить макет (VR)", "tr": "Layout Kaydet (VR)"},
+    "Müalicə": {"en": "Treatment", "ru": "Лечение", "tr": "Tedavi"},
+    "NƏ QƏDƏR VAXT AYRILSIN?": {"en": "HOW MUCH TIME TO ALLOCATE?", "ru": "СКОЛЬКО ВРЕМЕНИ ВЫДЕЛИТЬ?", "tr": "NE KADAR SÜRE AYRILSIN?"},
+    "PLANLANMIŞ": {"en": "PLANNED", "ru": "ЗАПЛАНИРОВАНО", "tr": "PLANLANAN"},
+    "MÜALİCƏ OLUNMUŞ": {"en": "TREATED", "ru": "ПРОЛЕЧЕНО", "tr": "TEDAVİ EDİLEN"},
+    "PNG, JPG, JPEG, BMP desteklenir": {"en": "PNG, JPG, JPEG, BMP supported", "ru": "Поддерживаются PNG, JPG, JPEG, BMP", "tr": "PNG, JPG, JPEG, BMP desteklenir"},
+    "Pasient adı:": {"en": "Patient name:", "ru": "Имя пациента:", "tr": "Hasta adı:"},
+    "Pasient seçin və ya yeni pasient əlavə edin": {"en": "Select a patient or add a new one", "ru": "Выберите пациента или добавьте нового", "tr": "Hasta seçin veya yeni hasta ekleyin"},
+    "Plan": {"en": "Plan", "ru": "План", "tr": "Plan"},
+    "QEYD": {"en": "NOTE", "ru": "ЗАМЕТКА", "tr": "NOT"},
+    "Qeyd Dəftəri": {"en": "Notebook", "ru": "Блокнот", "tr": "Not Defteri"},
+    "Qeyd başlığı...": {"en": "Note title...", "ru": "Заголовок заметки...", "tr": "Not başlığı..."},
+    "Qeyd mətni boş ola bilməz.": {"en": "Note text cannot be empty.", "ru": "Текст заметки не может быть пустым.", "tr": "Not metni boş olamaz."},
+    "Qeyd Əlavə Etmə Xətası": {"en": "Add Note Error", "ru": "Ошибка добавления заметки", "tr": "Not Ekleme Hatası"},
+    "RENTGEN QOVLUĞU": {"en": "X-RAY FOLDER", "ru": "ПАПКА РЕНТГЕНА", "tr": "RÖNTGEN KLASÖRÜ"},
+    "Randevu Rəngləri": {"en": "Appointment Colors", "ru": "Цвета записей", "tr": "Randevu Renkleri"},
+    "Randevu Təqvimi": {"en": "Appointment Calendar", "ru": "Календарь записей", "tr": "Randevu Takvimi"},
+    "Randevu Vaxtı": {"en": "Appointment Time", "ru": "Время записи", "tr": "Randevu Zamanı"},
+    "Randevunu sil": {"en": "Delete appointment", "ru": "Удалить запись", "tr": "Randevuyu sil"},
+    "Rentgen": {"en": "X-Ray", "ru": "Рентген", "tr": "Röntgen"},
+    "Rentgen görüntülərinin avtomatik tutulacağı qovluq.": {"en": "The folder where X-ray images are captured automatically.", "ru": "Папка, из которой рентген-снимки захватываются автоматически.", "tr": "Röntgen görüntülerinin otomatik yakalanacağı klasör."},
+    "SAAT (ss:dd)": {"en": "TIME (hh:mm)", "ru": "ВРЕМЯ (чч:мм)", "tr": "SAAT (ss:dd)"},
+    "SEÇİLİ DİŞ": {"en": "SELECTED TOOTH", "ru": "ВЫБРАННЫЙ ЗУБ", "tr": "SEÇİLİ DİŞ"},
+    "STATUS": {"en": "STATUS", "ru": "СТАТУС", "tr": "DURUM"},
+    "STATUS RƏNGLƏRİ": {"en": "STATUS COLORS", "ru": "ЦВЕТА СТАТУСОВ", "tr": "DURUM RENKLERİ"},
+    "Sil": {"en": "Delete", "ru": "Удалить", "tr": "Sil"},
+    "Sonra": {"en": "Later", "ru": "Позже", "tr": "Sonra"},
+    "TARİX (gg.aa.yyyy)": {"en": "DATE (dd.mm.yyyy)", "ru": "ДАТА (дд.мм.гггг)", "tr": "TARİH (gg.aa.yyyy)"},
+    "UE5 VibeUE sunucusuna bağlanılamadı.\n\nUE5'in açık ve PIE modunda olduğunu kontrol edin.\n\nManuel olarak UE5 Output Log'unda çalıştırın:\npy C:/BlueX/vr_save_layout.py": {
+        "en": "Could not connect to the UE5 VibeUE server.\n\nCheck that UE5 is open and in PIE mode.\n\nRun manually in the UE5 Output Log:\npy C:/BlueX/vr_save_layout.py",
+        "ru": "Не удалось подключиться к серверу UE5 VibeUE.\n\nПроверьте, что UE5 открыт и находится в режиме PIE.\n\nЗапустите вручную в UE5 Output Log:\npy C:/BlueX/vr_save_layout.py",
+        "tr": "UE5 VibeUE sunucusuna bağlanılamadı.\n\nUE5'in açık ve PIE modunda olduğunu kontrol edin.\n\nManuel olarak UE5 Output Log'unda çalıştırın:\npy C:/BlueX/vr_save_layout.py"},
+    "VR Layout Editörü": {"en": "VR Layout Editor", "ru": "Редактор макета VR", "tr": "VR Layout Editörü"},
+    "VR REJİMİ": {"en": "VR MODE", "ru": "РЕЖИМ VR", "tr": "VR MODU"},
+    "Vaka Adını Değiştir": {"en": "Rename Case", "ru": "Переименовать случай", "tr": "Vaka Adını Değiştir"},
+    "Vakayı Sil": {"en": "Delete Case", "ru": "Удалить случай", "tr": "Vakayı Sil"},
+    "Xəbərdarlıq": {"en": "Warning", "ru": "Предупреждение", "tr": "Uyarı"},
+    "Xəta": {"en": "Error", "ru": "Ошибка", "tr": "Hata"},
+    "YENİ QEYD": {"en": "NEW NOTE", "ru": "НОВАЯ ЗАМЕТКА", "tr": "YENİ NOT"},
+    "Yalnız alt qovluqlardakı faylları al": {"en": "Only take files from subfolders", "ru": "Брать файлы только из подпапок", "tr": "Sadece alt klasörlerdeki dosyaları al"},
+    "Yeni Pasient": {"en": "New Patient", "ru": "Новый пациент", "tr": "Yeni Hasta"},
+    "Yeni Rentgen Aşkarlandı": {"en": "New X-Ray Detected", "ru": "Обнаружен новый рентген-снимок", "tr": "Yeni Röntgen Algılandı"},
+    "Yeni Sürüm Var": {"en": "New Version Available", "ru": "Доступна новая версия", "tr": "Yeni Sürüm Var"},
+    "Yeni Vaka": {"en": "New Case", "ru": "Новый случай", "tr": "Yeni Vaka"},
+    "Yeni vaka adı:": {"en": "New case name:", "ru": "Новое название случая:", "tr": "Yeni vaka adı:"},
+    "Yükleme Hatası": {"en": "Loading Error", "ru": "Ошибка загрузки", "tr": "Yükleme Hatası"},
+    "Yüklendi": {"en": "Loaded", "ru": "Загружено", "tr": "Yüklendi"},
+    "Çıxış": {"en": "Log Out", "ru": "Выйти", "tr": "Çıkış"},
+    "Ümumi": {"en": "General", "ru": "Общие", "tr": "Genel"},
+    "İLKİN VƏZİYYƏT": {"en": "INITIAL CONDITION", "ru": "НАЧАЛЬНОЕ СОСТОЯНИЕ", "tr": "İLK DURUM"},
+    "İNTRAORAL VƏ ÜZ FOTOLARI": {"en": "INTRAORAL & FACE PHOTOS", "ru": "ВНУТРИРОТОВЫЕ И ЛИЦЕВЫЕ ФОТО", "tr": "AĞIZ İÇİ VE YÜZ FOTOĞRAFLARI"},
+    "İlkin Vəziyyət": {"en": "Initial Condition", "ru": "Начальное состояние", "tr": "İlk Durum"},
+    "İpucu: boş xanaya klikləyib o saata randevu əlavə et": {"en": "Tip: click an empty slot to add an appointment at that time", "ru": "Совет: щёлкните по пустой ячейке, чтобы добавить запись на это время", "tr": "İpucu: boş hücreye tıklayıp o saate randevu ekleyin"},
+    "Şifrə": {"en": "Password", "ru": "Пароль", "tr": "Şifre"},
+    "Əvvəlcə bir hasta seçin.": {"en": "Please select a patient first.", "ru": "Сначала выберите пациента.", "tr": "Önce bir hasta seçin."},
+    "Hasta adı boş ola bilməz.": {"en": "Patient name cannot be empty.", "ru": "Имя пациента не может быть пустым.", "tr": "Hasta adı boş olamaz."},
+    "Tarix formatı yanlışdır (gg.aa.yyyy).": {"en": "Invalid date format (dd.mm.yyyy).", "ru": "Неверный формат даты (дд.мм.гггг).", "tr": "Tarih formatı hatalı (gg.aa.yyyy)."},
+    "Ad Soyad": {"en": "Full Name", "ru": "ФИО", "tr": "Ad Soyad"},
+    "Yaş": {"en": "Age", "ru": "Возраст", "tr": "Yaş"},
+    "Telefon": {"en": "Phone", "ru": "Телефон", "tr": "Telefon"},
+    "TC/ID": {"en": "ID Number", "ru": "Номер ID", "tr": "TC/Kimlik No"},
+    "Qeyd": {"en": "Note", "ru": "Заметка", "tr": "Not"},
+    "☁ BULUD SENKRONİZASYONU": {"en": "☁ CLOUD SYNC", "ru": "☁ ОБЛАЧНАЯ СИНХРОНИЗАЦИЯ", "tr": "☁ BULUT SENKRONİZASYONU"},
+    "☁ Buluda Yüklə": {"en": "☁ Upload to Cloud", "ru": "☁ Загрузить в облако", "tr": "☁ Buluta Yükle"},
+    "☁ Buluddan Yenilə": {"en": "☁ Refresh from Cloud", "ru": "☁ Обновить из облака", "tr": "☁ Buluttan Yenile"},
+    "☁ Hasta Seç…": {"en": "☁ Select Patient…", "ru": "☁ Выбрать пациента…", "tr": "☁ Hasta Seç…"},
+    "⚙  Ayarlar": {"en": "⚙  Settings", "ru": "⚙  Настройки", "tr": "⚙  Ayarlar"},
+    "✓  Evet, Ekle": {"en": "✓  Yes, Add", "ru": "✓  Да, добавить", "tr": "✓  Evet, Ekle"},
+    "✓ Gəldi": {"en": "✓ Arrived", "ru": "✓ Прибыл", "tr": "✓ Geldi"},
+    "✗  Hayır, İptal": {"en": "✗  No, Cancel", "ru": "✗  Нет, отмена", "tr": "✗  Hayır, İptal"},
+    "⬇  İndir ve Kur": {"en": "⬇  Download & Install", "ru": "⬇  Скачать и установить", "tr": "⬇  İndir ve Kur"},
+    "🎨 Rənglər": {"en": "🎨 Colors", "ru": "🎨 Цвета", "tr": "🎨 Renkler"},
+    "💾 Saxla": {"en": "💾 Save", "ru": "💾 Сохранить", "tr": "💾 Kaydet"},
+    "📂  Pasient Yükle (.bxd)": {"en": "📂  Load Patient (.bxd)", "ru": "📂  Загрузить пациента (.bxd)", "tr": "📂  Hasta Yükle (.bxd)"},
+    "📂 Gözat…": {"en": "📂 Browse…", "ru": "📂 Обзор…", "tr": "📂 Gözat…"},
+    "📅  Randevu Təqvimi": {"en": "📅  Appointment Calendar", "ru": "📅  Календарь записей", "tr": "📅  Randevu Takvimi"},
+    "🔄 Güncellemeleri Kontrol Et": {"en": "🔄 Check for Updates", "ru": "🔄 Проверить обновления", "tr": "🔄 Güncellemeleri Kontrol Et"},
+    "🔍 Hasta axtar…": {"en": "🔍 Search patient…", "ru": "🔍 Поиск пациента…", "tr": "🔍 Hasta ara…"},
+    "🔬  Tedaviyə Keç": {"en": "🔬  Go to Treatment", "ru": "🔬  Перейти к лечению", "tr": "🔬  Tedaviye Geç"},
+    "🕒 Randevu vaxtı çatdı": {"en": "🕒 Appointment time has arrived", "ru": "🕒 Наступило время записи", "tr": "🕒 Randevu zamanı geldi"},
+    "🗑 Randevunu Sil": {"en": "🗑 Delete Appointment", "ru": "🗑 Удалить запись", "tr": "🗑 Randevuyu Sil"},
+    "🚀  Yeni Sürüm Mevcut": {"en": "🚀  New Version Available", "ru": "🚀  Доступна новая версия", "tr": "🚀  Yeni Sürüm Mevcut"},
+    "🥽  VR Düzenle": {"en": "🥽  Edit VR", "ru": "🥽  Редактор VR", "tr": "🥽  VR Düzenle"},
+    "🦷  P A S İ E N T L Ə R": {"en": "🦷  P A T I E N T S", "ru": "🦷  П А Ц И Е Н Т Ы", "tr": "🦷  H A S T A L A R"},
+    "🦷  Yeni Rentgen Aşkarlandı": {"en": "🦷  New X-Ray Detected", "ru": "🦷  Обнаружен новый рентген-снимок", "tr": "🦷  Yeni Röntgen Algılandı"},
+
+    # Əlavələr: dinamik/canvas yerlərdə istifadə olunur
+    "Sağlam": {"en": "Healthy", "ru": "Здоровый", "tr": "Sağlıklı"},
+    "Çürük": {"en": "Decay", "ru": "Кариес", "tr": "Çürük"},
+    "Çəkim": {"en": "Extraction", "ru": "Удаление", "tr": "Çekim"},
+    "Kanal": {"en": "Root Canal", "ru": "Канал", "tr": "Kanal"},
+    "Kompozit Dolğu": {"en": "Composite Filling", "ru": "Композитная пломба", "tr": "Kompozit Dolgu"},
+    "Qapaq": {"en": "Crown", "ru": "Коронка", "tr": "Kron"},
+    "İmplant": {"en": "Implant", "ru": "Имплант", "tr": "İmplant"},
+    "Əksik": {"en": "Missing", "ru": "Отсутствует", "tr": "Eksik"},
+    "Kök": {"en": "Root", "ru": "Корень", "tr": "Kök"},
+    "Gözləm": {"en": "Observation", "ru": "Наблюдение", "tr": "Gözlem"},
+    "Diş Daşı": {"en": "Tartar", "ru": "Зубной камень", "tr": "Diş Taşı"},
+    "Diş Daşı Təmizliyi": {"en": "Tartar Cleaning", "ru": "Чистка зубного камня", "tr": "Diş Taşı Temizliği"},
+    "Aktiv": {"en": "Active", "ru": "Активно", "tr": "Aktif"},
+    "Vaka": {"en": "Case", "ru": "Случай", "tr": "Vaka"},
+    "Diş": {"en": "Tooth", "ru": "Зуб", "tr": "Diş"},
+
+    "Gözləyir": {"en": "Waiting", "ru": "Ожидает", "tr": "Bekliyor"},
+    "Gəldi": {"en": "Arrived", "ru": "Прибыл", "tr": "Geldi"},
+    "Gəlmədi": {"en": "No-show", "ru": "Не пришёл", "tr": "Gelmedi"},
+    "Ləğv edildi": {"en": "Cancelled", "ru": "Отменено", "tr": "İptal edildi"},
+    "dəqiqə": {"en": "minutes", "ru": "минут", "tr": "dakika"},
+
+    "Sağ Üst": {"en": "Upper Right", "ru": "Верхняя правая", "tr": "Sağ Üst"},
+    "Sol Üst": {"en": "Upper Left", "ru": "Верхняя левая", "tr": "Sol Üst"},
+    "Sol Alt": {"en": "Lower Left", "ru": "Нижняя левая", "tr": "Sol Alt"},
+    "Sağ Alt": {"en": "Lower Right", "ru": "Нижняя правая", "tr": "Sağ Alt"},
+
+    "Santral": {"en": "Central Incisor", "ru": "Центральный резец", "tr": "Santral"},
+    "Lateral": {"en": "Lateral Incisor", "ru": "Боковой резец", "tr": "Lateral"},
+    "Kanin": {"en": "Canine", "ru": "Клык", "tr": "Kanin"},
+    "1.Premolar": {"en": "1st Premolar", "ru": "1-й премоляр", "tr": "1.Premolar"},
+    "2.Premolar": {"en": "2nd Premolar", "ru": "2-й премоляр", "tr": "2.Premolar"},
+    "1.Molar": {"en": "1st Molar", "ru": "1-й моляр", "tr": "1.Molar"},
+    "2.Molar": {"en": "2nd Molar", "ru": "2-й моляр", "tr": "2.Molar"},
+    "Yirmilik": {"en": "Wisdom Tooth", "ru": "Зуб мудрости", "tr": "Yirmi Yaş Dişi"},
+
+    "B.e": {"en": "Mon", "ru": "Пн", "tr": "Pzt"},
+    "Ç.a": {"en": "Tue", "ru": "Вт", "tr": "Sal"},
+    "Ç": {"en": "Wed", "ru": "Ср", "tr": "Çar"},
+    "C.a": {"en": "Thu", "ru": "Чт", "tr": "Per"},
+    "C": {"en": "Fri", "ru": "Пт", "tr": "Cum"},
+    "Ş": {"en": "Sat", "ru": "Сб", "tr": "Cmt"},
+    "B": {"en": "Sun", "ru": "Вс", "tr": "Paz"},
+
+    "Yan": {"en": "Jan", "ru": "Янв", "tr": "Oca"},
+    "Fev": {"en": "Feb", "ru": "Фев", "tr": "Şub"},
+    "Mar": {"en": "Mar", "ru": "Мар", "tr": "Mar"},
+    "Apr": {"en": "Apr", "ru": "Апр", "tr": "Nis"},
+    "May": {"en": "May", "ru": "Май", "tr": "May"},
+    "İyn": {"en": "Jun", "ru": "Июн", "tr": "Haz"},
+    "İyl": {"en": "Jul", "ru": "Июл", "tr": "Tem"},
+    "Avq": {"en": "Aug", "ru": "Авг", "tr": "Ağu"},
+    "Sen": {"en": "Sep", "ru": "Сен", "tr": "Eyl"},
+    "Okt": {"en": "Oct", "ru": "Окт", "tr": "Eki"},
+    "Noy": {"en": "Nov", "ru": "Ноя", "tr": "Kas"},
+    "Dek": {"en": "Dec", "ru": "Дек", "tr": "Ara"},
+}
+
+# hər dildəki mətndən (az/en/ru/tr — hansı hazırda ekranda olur-olsun) eyni girişə
+# geri-axtarış — dil bir neçə dəfə dəyişsə belə düzgün işləsin deyə
+_STR_TO_ENTRY = {}
+for _az, _entry in TRANSLATIONS.items():
+    _full = dict(_entry); _full["az"] = _az
+    _STR_TO_ENTRY[_az] = _full
+    for _v in _entry.values():
+        _STR_TO_ENTRY[_v] = _full
+
+def t(text):
+    """Cari dilə görə mətni tərcümə edir; bilinməyən mətn olduğu kimi qalır."""
+    entry = _STR_TO_ENTRY.get(text)
+    if not entry:
+        return text
+    return entry.get(CURRENT_LANG, text)
 
 def xray_watch_dir():
     return (AYARLAR.get("xray_klasoru") or "").strip() or XRAY_WATCH_DIR
@@ -240,7 +491,7 @@ def veri_yukle():
                 from datetime import datetime as _dt
                 vid = yeni_id("vaka")
                 h["vakalar"] = {vid: {
-                    "ad": "1. Vaka",
+                    "ad": f"1. {t('Vaka')}",
                     "tarih": _dt.now().strftime("%d.%m.%Y"),
                     "plan":   h.pop("plan",   {}),
                     "tedavi": h.pop("tedavi", {}),
@@ -376,19 +627,19 @@ ALT = [48,47,46,45,44,43,42,41,31,32,33,34,35,36,37,38]
 DIS_AD = {1:"Santral",2:"Lateral",3:"Kanin",4:"1.Premolar",
            5:"2.Premolar",6:"1.Molar",7:"2.Molar",8:"Yirmilik"}
 KADRAN = {1:"Sağ Üst",2:"Sol Üst",3:"Sol Alt",4:"Sağ Alt"}
-def dis_adi(n): return f"{KADRAN[n//10]} {DIS_AD[n%10]}"
+def dis_adi(n): return f"{t(KADRAN[n//10])} {t(DIS_AD[n%10])}"
 
 TEDAVILER = [
-    ("saglikli","Sağlıklı", None),
+    ("saglikli","Sağlam", None),
     ("curuk",   "Çürük",    (150, 94,  44 )),   # kron üzerinde çürük lekeleri — yalnız İlkin Vəziyyət sekmesinde
-    ("cekim",   "Çekim",    (220, 50,  50 )),
+    ("cekim",   "Çəkim",    (220, 50,  50 )),
     ("kanal",   "Kanal",    (65,  105, 225)),
-    ("dolgu",   "Dolgu",    (0,   180, 120)),
-    ("kron",    "Kron",     (180, 50,  220)),
+    ("dolgu",   "Kompozit Dolğu",    (0,   180, 120)),
+    ("kron",    "Qapaq",     (180, 50,  220)),
     ("implant", "İmplant",  (34,  139, 34 )),
-    ("eksik",   "Eksik",    (128, 128, 128)),
+    ("eksik",   "Əksik",    (128, 128, 128)),
     ("kok",     "Kök",      (184, 122, 58 )),   # kron hissəsi dağılmış diş — yalnız İlkin Vəziyyət sekmesinde
-    ("gozlem",  "Gözlem",   (255, 140, 0  )),
+    ("gozlem",  "Gözləm",   (255, 140, 0  )),
 ]
 T_COLOR = {t[0]: t[2] for t in TEDAVILER}
 
@@ -426,22 +677,22 @@ def _norm_yuz(v):
 def dis_durum_str(durum):
     """Diş durumunu okunabilir string'e çevir"""
     parcalar = []
-    if durum.get("kanal"): parcalar.append("Kanal")
+    if durum.get("kanal"): parcalar.append(t("Kanal"))
     tac = durum.get("tac","saglikli")
     # eski veri: "curuk"/"dolgu" doğrudan tac olarak saklanmış olabilir
     if tac == "curuk":
-        parcalar.append("Çürük")
+        parcalar.append(t("Çürük"))
     elif tac == "dolgu":
-        parcalar.append("Dolgu")
+        parcalar.append(t("Kompozit Dolğu"))
     elif tac != "saglikli":
         for tid,lbl,_ in TEDAVILER:
             if tid == tac:
-                parcalar.append(lbl)
+                parcalar.append(t(lbl))
                 break
-    if durum.get("dolgu") and tac != "dolgu": parcalar.append("Dolgu(" + "".join(durum["dolgu"]) + ")")
-    if durum.get("curuk") and tac != "curuk": parcalar.append("Çürük(" + "".join(durum["curuk"]) + ")")
-    if durum.get("kron"): parcalar.append("Kron")
-    return " + ".join(parcalar) if parcalar else "Sağlıklı"
+    if durum.get("dolgu") and tac != "dolgu": parcalar.append(t("Kompozit Dolğu") + "(" + "".join(durum["dolgu"]) + ")")
+    if durum.get("curuk") and tac != "curuk": parcalar.append(t("Çürük") + "(" + "".join(durum["curuk"]) + ")")
+    if durum.get("kron"): parcalar.append(t("Qapaq"))
+    return " + ".join(parcalar) if parcalar else t("Sağlam")
 
 def normalize_state(s):
     if isinstance(s, str):
@@ -468,12 +719,12 @@ def normalize_state(s):
 def state_to_label(s):
     ns = normalize_state(s)
     parts = []
-    if ns["kanal"]: parts.append("Kanal")
+    if ns["kanal"]: parts.append(t("Kanal"))
     if ns["tac"]:
         lbl = next((x[1] for x in TEDAVILER if x[0]==ns["tac"]), ns["tac"].capitalize())
-        parts.append(lbl)
-    if ns["kron"]: parts.append("Kron")
-    return " + ".join(parts) if parts else "Sağlıklı"
+        parts.append(t(lbl))
+    if ns["kron"]: parts.append(t("Qapaq"))
+    return " + ".join(parts) if parts else t("Sağlam")
 
 # ── ARCH GÖRÜNTÜSÜ VE MASKELER ────────────────────────────────────────────────
 _arch_base = None   # orijinal numpy array
@@ -1178,19 +1429,19 @@ def get_map_photo(tedaviler, dis_tasi=False, secili=None, band_lbl="Diş Daşı 
         if ns["dolgu"]: cnt["dolgu"] = cnt.get("dolgu", 0) + 1
         if not ns["tac"] and not ns["kanal"] and not ns["kron"] and not ns["curuk"] and not ns["dolgu"]:
             healthy += 1
-    row1 = [("Sağlıklı", M_IVORY, healthy),
-            ("Çekim", M_COLORS["cekim"], cnt.get("cekim", 0)),
-            ("Kanal", M_COLORS["kanal"], cnt.get("kanal", 0)),
-            ("Dolgu", M_COLORS["dolgu"], cnt.get("dolgu", 0)),
-            ("Kron", M_COLORS["kron"], cnt.get("kron", 0))]
-    row2 = [("İmplant", M_COLORS["implant"], cnt.get("implant", 0)),
-            ("Eksik", (90, 98, 112), cnt.get("eksik", 0))]
+    row1 = [(t("Sağlam"), M_IVORY, healthy),
+            (t("Çəkim"), M_COLORS["cekim"], cnt.get("cekim", 0)),
+            (t("Kanal"), M_COLORS["kanal"], cnt.get("kanal", 0)),
+            (t("Kompozit Dolğu"), M_COLORS["dolgu"], cnt.get("dolgu", 0)),
+            (t("Qapaq"), M_COLORS["kron"], cnt.get("kron", 0))]
+    row2 = [(t("İmplant"), M_COLORS["implant"], cnt.get("implant", 0)),
+            (t("Əksik"), (90, 98, 112), cnt.get("eksik", 0))]
     if ilkin:
-        row2 += [("Çürük", M_COLORS["curuk"], cnt.get("curuk", 0)),
-                 ("Kök", M_COLORS["kok"], cnt.get("kok", 0))]
+        row2 += [(t("Çürük"), M_COLORS["curuk"], cnt.get("curuk", 0)),
+                 (t("Kök"), M_COLORS["kok"], cnt.get("kok", 0))]
     else:
-        row2 += [("Gözlem", M_COLORS["gozlem"], cnt.get("gozlem", 0))]
-    row2 += [("Diş Daşı", M_TARTAR, "Aktiv" if dis_tasi else "—")]
+        row2 += [(t("Gözləm"), M_COLORS["gozlem"], cnt.get("gozlem", 0))]
+    row2 += [(t("Diş Daşı"), M_TARTAR, t("Aktiv") if dis_tasi else "—")]
     for ycen, items in ((M_LEG1, row1), (M_LEG2, row2)):
         lx = 14 * K * S
         for name, colr, c in items:
@@ -1326,7 +1577,7 @@ class ArchCanvas(tk.Canvas):
         self.tedaviler = {}
         self.dis_tasi = False
         self.secili = None
-        self.band_label = "Diş Daşı Təmizliyi"
+        self.band_label = t("Diş Daşı Təmizliyi")
         self.ilkin = False
         self._ref = None
         self._surukle_sira = None   # sürükleme başladığı diş sırası (UST/ALT)
@@ -1428,7 +1679,7 @@ class ArchCanvas(tk.Canvas):
 class DentalApp(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Dental Tedavi Planlama")
+        self.title(t("Dental Tedavi Planlama"))
         try:
             if os.path.exists(ICON_FILE): self.iconbitmap(ICON_FILE)
         except Exception: pass
@@ -1436,6 +1687,7 @@ class DentalApp(ctk.CTk):
         # büyük harita için tam ekran çalışma alanı (mainloop başladıktan sonra)
         self.after(50, self._maximize)
         self.hastalar = veri_yukle()
+        self.randevular = randevu_yukle()
         try: os.makedirs(self._BXD_BASE, exist_ok=True)   # yedek klasörü açılışta hazır olsun
         except Exception: pass
         self.aktif_hid = None
@@ -1473,6 +1725,10 @@ class DentalApp(ctk.CTk):
         # ── Otomatik güncelleme kontrolü (sessiz — açılıştan birkaç saniye sonra) ──
         self.after(4000, lambda: self._guncelleme_kontrol_et(sessiz=True))
 
+        # ── Randevu vaxtı çatanda "gəldi" təsdiqi (2 dəqiqə cavabsız qalsa avtomatik) ──
+        self._randevu_prompted = set()
+        self.after(15000, self._randevu_tick)
+
     def _maximize(self):
         try:
             self.state("zoomed")
@@ -1485,40 +1741,44 @@ class DentalApp(ctk.CTk):
 
         sol = ctk.CTkFrame(self,width=240,corner_radius=0,fg_color=TH["sidebar"])
         sol.grid(row=0,column=0,sticky="nsew"); sol.grid_propagate(False)
-        sol.grid_rowconfigure(4,weight=1); sol.grid_columnconfigure(0,weight=1)
-        ctk.CTkLabel(sol,text="🦷  H A S T A L A R",font=ctk.CTkFont(size=13,weight="bold"),
+        sol.grid_rowconfigure(5,weight=1); sol.grid_columnconfigure(0,weight=1)
+        ctk.CTkLabel(sol,text=t("🦷  P A S İ E N T L Ə R"),font=ctk.CTkFont(size=13,weight="bold"),
                      text_color=TH["txt_faint"]).grid(row=0,column=0,padx=14,pady=(20,10),sticky="w")
-        ctk.CTkButton(sol,text="+  Yeni Hasta",height=38,corner_radius=10,
+        ctk.CTkButton(sol,text=t("+  Yeni Pasient"),height=38,corner_radius=10,
                       fg_color=TH["accent"],hover_color=TH["accent_hover"],
                       font=ctk.CTkFont(size=13,weight="bold"),
                       command=self._yeni_hasta).grid(row=1,column=0,padx=10,pady=(0,6),sticky="ew")
-        ctk.CTkButton(sol,text="📂  Hasta Yükle (.bxd)",height=34,corner_radius=10,
+        ctk.CTkButton(sol,text=t("📅  Randevu Təqvimi"),height=38,corner_radius=10,
+                      fg_color=TH["indigo"],hover_color=TH["indigo_hover"],
+                      font=ctk.CTkFont(size=13,weight="bold"),
+                      command=self._randevu_ac).grid(row=2,column=0,padx=10,pady=(0,6),sticky="ew")
+        ctk.CTkButton(sol,text=t("📂  Pasient Yükle (.bxd)"),height=34,corner_radius=10,
                       fg_color="transparent",border_width=1,border_color="#3B5E8F",
                       text_color="#B9CDEB",hover_color=TH["sidebar_row"],
-                      command=self._hasta_yukle).grid(row=2,column=0,padx=10,pady=(0,10),sticky="ew")
+                      command=self._hasta_yukle).grid(row=3,column=0,padx=10,pady=(0,10),sticky="ew")
         arama_f = ctk.CTkFrame(sol,fg_color="transparent")
-        arama_f.grid(row=3,column=0,padx=10,pady=(0,6),sticky="ew")
+        arama_f.grid(row=4,column=0,padx=10,pady=(0,6),sticky="ew")
         arama_f.grid_columnconfigure(0,weight=1)
         ctk.CTkEntry(arama_f,textvariable=self.hasta_arama_var,
-                     placeholder_text="🔍 Hasta axtar…",height=32,corner_radius=8,
+                     placeholder_text=t("🔍 Hasta axtar…"),height=32,corner_radius=8,
                      border_color=TH["accent_soft"],fg_color=TH["sidebar_row"],
                      text_color="white").grid(row=0,column=0,sticky="ew")
         self.scroll = ctk.CTkScrollableFrame(sol,fg_color="transparent")
-        self.scroll.grid(row=4,column=0,padx=4,pady=4,sticky="nsew")
-        ctk.CTkButton(sol,text="⚙  Ayarlar",height=32,corner_radius=10,
+        self.scroll.grid(row=5,column=0,padx=4,pady=4,sticky="nsew")
+        ctk.CTkButton(sol,text=t("⚙  Ayarlar"),height=32,corner_radius=10,
                       fg_color="transparent",border_width=1,border_color="#3B5E8F",
                       text_color="#B9CDEB",hover_color=TH["sidebar_row"],
-                      command=self._ayarlar_ac).grid(row=5,column=0,padx=10,pady=(4,4),sticky="ew")
+                      command=self._ayarlar_ac).grid(row=6,column=0,padx=10,pady=(4,4),sticky="ew")
         self.cloud_status_lbl = ctk.CTkLabel(sol,text="",font=ctk.CTkFont(size=10),
                                              text_color="#7A99C4")
-        self.cloud_status_lbl.grid(row=6,column=0,padx=12,pady=(0,10),sticky="w")
+        self.cloud_status_lbl.grid(row=7,column=0,padx=12,pady=(0,10),sticky="w")
         self._cloud_status_guncelle()
 
         self.sag = ctk.CTkFrame(self,fg_color=TH["bg"],corner_radius=0)
         self.sag.grid(row=0,column=1,sticky="nsew")
         self.sag.grid_columnconfigure(0,weight=1); self.sag.grid_rowconfigure(0,weight=1)
 
-        self.kars = ctk.CTkLabel(self.sag,text="Hasta seçin veya yeni hasta ekleyin",
+        self.kars = ctk.CTkLabel(self.sag,text=t("Pasient seçin və ya yeni pasient əlavə edin"),
                                   font=ctk.CTkFont(size=15),text_color=TH["txt_sub"])
         self.kars.grid(row=0,column=0)
 
@@ -1539,30 +1799,31 @@ class DentalApp(ctk.CTk):
         sf = ctk.CTkFrame(ust,fg_color="transparent")
         sf.grid(row=0,column=1,padx=10,sticky="e")
         self.step_btn=[]
-        for sid,t in [(2,"İlkin Vəziyyət"),(0,"Plan"),(1,"Müalicə")]:
-            b=ctk.CTkButton(sf,text=t,width=110,height=32,corner_radius=16,
+        for sid,etiket in [(2,"İlkin Vəziyyət"),(0,"Plan"),(1,"Müalicə")]:
+            b=ctk.CTkButton(sf,text=t(etiket),width=110,height=32,corner_radius=16,
                             command=lambda s=sid:self._step(s))
             b.pack(side="left",padx=4); self.step_btn.append((sid,b))
 
-        # Tedaviye Geç butonu
-
-        ctk.CTkButton(sf,text="🔬  Tedaviyə Keç",width=150,height=32,corner_radius=16,
+        # VR düymələri — Ayarlar'dakı "VR Rejimi" açarı ilə göstərilib/gizlədilir
+        self._vr_dugmeleri_sf = sf
+        self._btn_tedaviye_kec = ctk.CTkButton(sf,text=t("🔬  Tedaviyə Keç"),width=150,height=32,corner_radius=16,
                        fg_color=TH["ok"],hover_color=TH["ok_hover"],
                        text_color="white",
                        font=ctk.CTkFont(size=12,weight="bold"),
-                       command=self._tedaviye_kec).pack(side="left",padx=(14,4))
+                       command=self._tedaviye_kec)
 
-        ctk.CTkButton(sf,text="🥽  VR Düzenle",width=120,height=32,corner_radius=16,
+        self._btn_vr_duzenle = ctk.CTkButton(sf,text=t("🥽  VR Düzenle"),width=120,height=32,corner_radius=16,
                        fg_color=TH["accent"],hover_color=TH["accent_hover"],
                        text_color="white",
                        font=ctk.CTkFont(size=12,weight="bold"),
-                       command=self._vr_duzenle).pack(side="left",padx=(12,2))
+                       command=self._vr_duzenle)
 
-        ctk.CTkButton(sf,text="Layout Kaydet (VR)",width=150,height=32,corner_radius=16,
+        self._btn_vr_layout = ctk.CTkButton(sf,text=t("Layout Kaydet (VR)"),width=150,height=32,corner_radius=16,
                        fg_color=TH["indigo"],hover_color=TH["indigo_hover"],
                        text_color="white",
                        font=ctk.CTkFont(size=11,weight="bold"),
-                       command=self._vr_layout_kaydet).pack(side="left",padx=(2,4))
+                       command=self._vr_layout_kaydet)
+        self._vr_ui_guncelle()
 
         self.tab = ctk.CTkTabview(self.icerik,fg_color="transparent",
                                    segmented_button_fg_color=TH["accent_soft"],
@@ -1572,11 +1833,11 @@ class DentalApp(ctk.CTk):
                                    segmented_button_unselected_hover_color="#7FA0CE",
                                    text_color="white")
         self.tab.grid(row=1,column=0,sticky="nsew",padx=10,pady=(0,10))
-        self.pI = self.tab.add("İlkin Vəziyyət")
-        self.p0 = self.tab.add("Plan")
-        self.p1 = self.tab.add("Müalicə")
-        self.p2 = self.tab.add("Not Defteri")
-        self.p3 = self.tab.add("Röntgen")
+        self.pI = self.tab.add(t("İlkin Vəziyyət"))
+        self.p0 = self.tab.add(t("Plan"))
+        self.p1 = self.tab.add(t("Müalicə"))
+        self.p2 = self.tab.add(t("Qeyd Dəftəri"))
+        self.p3 = self.tab.add(t("Rentgen"))
         self._build_pI(); self._build_p0(); self._build_p1()
         self._build_notlar(); self._build_rontgen()
         self._step(0)
@@ -1590,29 +1851,29 @@ class DentalApp(ctk.CTk):
         arch_f=ctk.CTkFrame(content,fg_color="transparent")
         arch_f.grid(row=1,column=0,sticky="nsew")
         self.arch2=ArchCanvas(arch_f,self._tikla2,on_range=self._tikla2_range)
-        self.arch2.band_label = "Diş Daşı"
+        self.arch2.band_label = t("Diş Daşı")
         self.arch2.ilkin = True
         self.arch2.pack(side="left",anchor="n",padx=10,pady=8)
 
         infoI_f=ctk.CTkFrame(arch_f,fg_color=TH["panel"],width=220,corner_radius=12)
         infoI_f.pack(side="left",fill="y",padx=(0,8),pady=8)
         infoI_f.pack_propagate(False)
-        ctk.CTkLabel(infoI_f,text="SEÇİLİ DİŞ",
+        ctk.CTkLabel(infoI_f,text=t("SEÇİLİ DİŞ"),
                      font=ctk.CTkFont(size=11,weight="bold"),text_color=TH["accent"]).pack(pady=(16,4))
         self.dis_info2=ctk.CTkLabel(infoI_f,text="—",font=ctk.CTkFont(size=14,weight="bold"),
                                      text_color=TH["txt"],wraplength=200)
         self.dis_info2.pack(pady=4)
-        ctk.CTkLabel(infoI_f,text="İLKİN VƏZİYYƏT",
+        ctk.CTkLabel(infoI_f,text=t("İLKİN VƏZİYYƏT"),
                      font=ctk.CTkFont(size=11,weight="bold"),text_color=TH["accent"]).pack(pady=(16,4))
         self.plan_liste2=ctk.CTkScrollableFrame(infoI_f,fg_color="transparent")
         self.plan_liste2.pack(fill="both",expand=True,padx=6,pady=4)
 
         foto_fI=ctk.CTkFrame(arch_f,fg_color=TH["panel"],corner_radius=12)
         foto_fI.pack(side="left",fill="both",expand=True,padx=(0,8),pady=8)
-        ctk.CTkLabel(foto_fI,text="İNTRAORAL VƏ ÜZ FOTOLARI",
+        ctk.CTkLabel(foto_fI,text=t("İNTRAORAL VƏ ÜZ FOTOLARI"),
                      font=ctk.CTkFont(size=11,weight="bold"),
                      text_color=TH["accent"]).pack(pady=(12,2),padx=10,anchor="w")
-        ctk.CTkButton(foto_fI,text="+ Foto Əlavə Et",height=28,corner_radius=8,
+        ctk.CTkButton(foto_fI,text=t("+ Foto Əlavə Et"),height=28,corner_radius=8,
                        fg_color=TH["accent"],hover_color=TH["accent_hover"],
                        command=lambda: self._foto_ekle("ilkin")).pack(padx=10,pady=(2,4),anchor="w")
         self.foto_scroll_pI=ctk.CTkScrollableFrame(foto_fI,fg_color="transparent")
@@ -1626,13 +1887,14 @@ class DentalApp(ctk.CTk):
         form.grid_columnconfigure((0,1,2,3,4),weight=1)
         for i,(lbl,attr) in enumerate([("Ad Soyad","p0_ad"),("Yaş","p0_yas"),
                 ("Telefon","p0_tel"),("TC/ID","p0_tc"),("Qeyd","p0_not")]):
+            lbl = t(lbl)
             ctk.CTkLabel(form,text=lbl,font=ctk.CTkFont(size=11,weight="bold"),
                          text_color=TH["txt_sub"]).grid(row=0,column=i,padx=8,pady=(8,2),sticky="w")
             e=ctk.CTkEntry(form,placeholder_text=lbl,height=32,corner_radius=8,
                            border_color=TH["accent_soft"],fg_color=TH["panel_soft"])
             e.grid(row=1,column=i,padx=8,pady=(0,8),sticky="ew")
             setattr(self,attr,e)
-        kb=ctk.CTkButton(form,text="💾 Saxla",width=90,height=32,corner_radius=8,
+        kb=ctk.CTkButton(form,text=t("💾 Saxla"),width=90,height=32,corner_radius=8,
                           fg_color=TH["accent"],hover_color=TH["accent_hover"],
                           font=ctk.CTkFont(size=12,weight="bold"),command=self._kaydet)
         kb.grid(row=1,column=5,padx=8,pady=(0,8)); self.p0_kaydet=kb
@@ -1650,22 +1912,22 @@ class DentalApp(ctk.CTk):
         info_f=ctk.CTkFrame(arch_f,fg_color=TH["panel"],width=220,corner_radius=12)
         info_f.pack(side="left",fill="y",padx=(0,8),pady=8)
         info_f.pack_propagate(False)
-        ctk.CTkLabel(info_f,text="SEÇİLİ DİŞ",
+        ctk.CTkLabel(info_f,text=t("SEÇİLİ DİŞ"),
                      font=ctk.CTkFont(size=11,weight="bold"),text_color=TH["accent"]).pack(pady=(16,4))
         self.dis_info=ctk.CTkLabel(info_f,text="—",font=ctk.CTkFont(size=14,weight="bold"),
                                     text_color=TH["txt"],wraplength=200)
         self.dis_info.pack(pady=4)
-        ctk.CTkLabel(info_f,text="PLANLANMIŞ",
+        ctk.CTkLabel(info_f,text=t("PLANLANMIŞ"),
                      font=ctk.CTkFont(size=11,weight="bold"),text_color=TH["accent"]).pack(pady=(16,4))
         self.plan_liste=ctk.CTkScrollableFrame(info_f,fg_color="transparent")
         self.plan_liste.pack(fill="both",expand=True,padx=6,pady=4)
 
         foto_f=ctk.CTkFrame(arch_f,fg_color=TH["panel"],corner_radius=12)
         foto_f.pack(side="left",fill="both",expand=True,padx=(0,8),pady=8)
-        ctk.CTkLabel(foto_f,text="İNTRAORAL VƏ ÜZ FOTOLARI",
+        ctk.CTkLabel(foto_f,text=t("İNTRAORAL VƏ ÜZ FOTOLARI"),
                      font=ctk.CTkFont(size=11,weight="bold"),
                      text_color=TH["accent"]).pack(pady=(12,2),padx=10,anchor="w")
-        ctk.CTkButton(foto_f,text="+ Foto Əlavə Et",height=28,corner_radius=8,
+        ctk.CTkButton(foto_f,text=t("+ Foto Əlavə Et"),height=28,corner_radius=8,
                        fg_color=TH["accent"],hover_color=TH["accent_hover"],
                        command=lambda: self._foto_ekle("plan")).pack(padx=10,pady=(2,4),anchor="w")
         self.foto_scroll_p0=ctk.CTkScrollableFrame(foto_f,fg_color="transparent")
@@ -1685,22 +1947,22 @@ class DentalApp(ctk.CTk):
         info1_f=ctk.CTkFrame(arch_f,fg_color=TH["panel"],width=220,corner_radius=12)
         info1_f.pack(side="left",fill="y",padx=(0,8),pady=8)
         info1_f.pack_propagate(False)
-        ctk.CTkLabel(info1_f,text="SEÇİLİ DİŞ",
+        ctk.CTkLabel(info1_f,text=t("SEÇİLİ DİŞ"),
                      font=ctk.CTkFont(size=11,weight="bold"),text_color=TH["accent"]).pack(pady=(16,4))
         self.dis_info1=ctk.CTkLabel(info1_f,text="—",font=ctk.CTkFont(size=14,weight="bold"),
                                      text_color=TH["txt"],wraplength=200)
         self.dis_info1.pack(pady=4)
-        ctk.CTkLabel(info1_f,text="PLANLANMIŞ",
+        ctk.CTkLabel(info1_f,text=t("MÜALİCƏ OLUNMUŞ"),
                      font=ctk.CTkFont(size=11,weight="bold"),text_color=TH["accent"]).pack(pady=(16,4))
         self.plan_liste1=ctk.CTkScrollableFrame(info1_f,fg_color="transparent")
         self.plan_liste1.pack(fill="both",expand=True,padx=6,pady=4)
 
         foto_f1=ctk.CTkFrame(arch_f,fg_color=TH["panel"],corner_radius=12)
         foto_f1.pack(side="left",fill="both",expand=True,padx=(0,8),pady=8)
-        ctk.CTkLabel(foto_f1,text="İNTRAORAL VƏ ÜZ FOTOLARI",
+        ctk.CTkLabel(foto_f1,text=t("İNTRAORAL VƏ ÜZ FOTOLARI"),
                      font=ctk.CTkFont(size=11,weight="bold"),
                      text_color=TH["accent"]).pack(pady=(12,2),padx=10,anchor="w")
-        ctk.CTkButton(foto_f1,text="+ Foto Əlavə Et",height=28,corner_radius=8,
+        ctk.CTkButton(foto_f1,text=t("+ Foto Əlavə Et"),height=28,corner_radius=8,
                        fg_color=TH["accent"],hover_color=TH["accent_hover"],
                        command=lambda: self._foto_ekle("tedavi")).pack(padx=10,pady=(2,4),anchor="w")
         self.foto_scroll_p1=ctk.CTkScrollableFrame(foto_f1,fg_color="transparent")
@@ -1714,11 +1976,11 @@ class DentalApp(ctk.CTk):
         bar=ctk.CTkFrame(self.p2,fg_color=TH["panel"],corner_radius=12)
         bar.grid(row=0,column=0,sticky="ew",padx=8,pady=(6,4))
         bar.grid_columnconfigure(0,weight=1)
-        self.not_baslik=ctk.CTkEntry(bar,placeholder_text="Not başlığı...",height=32,
+        self.not_baslik=ctk.CTkEntry(bar,placeholder_text=t("Qeyd başlığı..."),height=32,
                                       corner_radius=8,border_color=TH["accent_soft"],
                                       fg_color=TH["panel_soft"])
         self.not_baslik.grid(row=0,column=0,padx=10,pady=10,sticky="ew")
-        self.not_ekle_btn=ctk.CTkButton(bar,text="+ Not Ekle",width=110,height=32,
+        self.not_ekle_btn=ctk.CTkButton(bar,text=t("+ Qeyd Əlavə Et"),width=130,height=32,
                                           corner_radius=8,fg_color=TH["accent"],
                                           hover_color=TH["accent_hover"],
                                           font=ctk.CTkFont(size=12,weight="bold"),
@@ -1733,7 +1995,7 @@ class DentalApp(ctk.CTk):
         alt=ctk.CTkFrame(self.p2,fg_color=TH["panel"],corner_radius=12)
         alt.grid(row=2,column=0,sticky="ew",padx=8,pady=4)
         alt.grid_columnconfigure(0,weight=1)
-        ctk.CTkLabel(alt,text="YENİ NOT",
+        ctk.CTkLabel(alt,text=t("YENİ QEYD"),
                      font=ctk.CTkFont(size=11,weight="bold"),text_color=TH["accent"]).grid(
                      row=0,column=0,padx=10,pady=(8,2),sticky="w")
         self.not_metin=ctk.CTkTextbox(alt,height=80,corner_radius=8,
@@ -1744,36 +2006,36 @@ class DentalApp(ctk.CTk):
     def _not_ekle(self):
         try:
             if not self.aktif_hid:
-                tk.messagebox.showwarning("Uyarı", "Önce bir hasta seçin.")
+                tk.messagebox.showwarning(t("Xəbərdarlıq"), t("Əvvəlcə bir hasta seçin."))
                 return
             baslik = self.not_baslik.get().strip()
             metin  = self.not_metin.get("1.0", "end").strip()
             if not metin:
-                tk.messagebox.showwarning("Uyarı", "Not metni boş olamaz.")
+                tk.messagebox.showwarning(t("Xəbərdarlıq"), t("Qeyd mətni boş ola bilməz."))
                 return
             h = self.hastalar[self.aktif_hid]
             h.setdefault("notlar_liste", []).append({
                 "tarih":  datetime.now().strftime("%d.%m.%Y %H:%M"),
-                "baslik": baslik or "Not",
+                "baslik": baslik or "Qeyd",
                 "metin":  metin,
             })
             veri_kaydet(self.hastalar)
             self.not_baslik.delete(0, "end")
             self.not_metin.delete("1.0", "end")
             self._notlar_guncelle()
-            self.not_ekle_btn.configure(text="Eklendi ✓", fg_color=TH["ok"])
+            self.not_ekle_btn.configure(text="Əlavə edildi ✓", fg_color=TH["ok"])
             self.after(2000, lambda: self.not_ekle_btn.configure(
-                text="+ Not Ekle", fg_color=TH["accent"]))
+                text="+ Qeyd Əlavə Et", fg_color=TH["accent"]))
         except Exception as exc:
             import traceback
-            tk.messagebox.showerror("Not Ekle Hatası", traceback.format_exc())
+            tk.messagebox.showerror(t("Qeyd Əlavə Etmə Xətası"), traceback.format_exc())
 
     def _notlar_guncelle(self):
         for w in self.not_scroll.winfo_children(): w.destroy()
         if not self.aktif_hid: return
         h=self.hastalar[self.aktif_hid]
         notlar=h.get("notlar_liste",[])
-        if isinstance(notlar,str): notlar=[{"tarih":"","baslik":"Not","metin":notlar}]
+        if isinstance(notlar,str): notlar=[{"tarih":"","baslik":"Qeyd","metin":notlar}]
         for i,not_ in enumerate(reversed(notlar)):
             kart=ctk.CTkFrame(self.not_scroll,fg_color="white",
                                corner_radius=8)
@@ -1783,7 +2045,7 @@ class DentalApp(ctk.CTk):
             baslik_f=ctk.CTkFrame(kart,fg_color=TH["accent_soft"],corner_radius=8)
             baslik_f.pack(fill="x",padx=8,pady=(8,4))
             ctk.CTkLabel(baslik_f,
-                         text=not_.get("baslik","Not"),
+                         text=not_.get("baslik","Qeyd"),
                          font=ctk.CTkFont(size=12,weight="bold"),
                          text_color=TH["accent"]).pack(side="left",padx=8,pady=4)
             ctk.CTkLabel(baslik_f,
@@ -1799,7 +2061,7 @@ class DentalApp(ctk.CTk):
                          anchor="w",padx=12,pady=(0,8))
             # Sil butonu
             idx=len(notlar)-1-i
-            ctk.CTkButton(kart,text="Sil",width=50,height=22,
+            ctk.CTkButton(kart,text=t("Sil"),width=50,height=22,
                            fg_color="#ffeeee",text_color="#cc3333",
                            hover_color="#ffcccc",
                            command=lambda ix=idx:self._not_sil(ix)).pack(
@@ -1820,11 +2082,11 @@ class DentalApp(ctk.CTk):
 
         bar=ctk.CTkFrame(self.p3,fg_color=TH["panel"],corner_radius=12)
         bar.grid(row=0,column=0,sticky="ew",padx=8,pady=(6,4))
-        ctk.CTkButton(bar,text="+ Röntgen Ekle",height=34,corner_radius=8,
+        ctk.CTkButton(bar,text=t("+ Rentgen Əlavə Et"),height=34,corner_radius=8,
                        fg_color=TH["accent"],hover_color=TH["accent_hover"],
                        font=ctk.CTkFont(size=12,weight="bold"),
                        command=self._rontgen_ekle).pack(side="left",padx=10,pady=10)
-        ctk.CTkLabel(bar,text="PNG, JPG, JPEG, BMP desteklenir",
+        ctk.CTkLabel(bar,text=t("PNG, JPG, JPEG, BMP desteklenir"),
                      font=ctk.CTkFont(size=11),text_color=TH["txt_sub"]).pack(
                      side="left",padx=6)
 
@@ -1835,7 +2097,7 @@ class DentalApp(ctk.CTk):
         if not self.aktif_hid: return
         from tkinter import filedialog
         dosya=filedialog.askopenfilename(
-            title="Röntgen Seç",
+            title="Rentgen Seç",
             filetypes=[("Görüntü","*.png *.jpg *.jpeg *.bmp"),("Tüm","*.*")])
         if not dosya: return
         import base64
@@ -1859,7 +2121,7 @@ class DentalApp(ctk.CTk):
         rontgenler = h.get("rontgenler", [])
         if not rontgenler:
             ctk.CTkLabel(self.rontgen_scroll,
-                         text="Henüz röntgen eklenmedi",
+                         text=t("Henüz röntgen eklenmedi"),
                          text_color="#aaa").pack(pady=20)
             return
 
@@ -1919,7 +2181,7 @@ class DentalApp(ctk.CTk):
                                  text_color="red",
                                  wraplength=THUMB).pack(padx=6, pady=4)
                 # Delete button
-                ctk.CTkButton(kart, text="Sil", width=44, height=20,
+                ctk.CTkButton(kart, text=t("Sil"), width=44, height=20,
                                fg_color="#ffeeee", text_color="#cc3333",
                                hover_color="#ffcccc",
                                font=ctk.CTkFont(size=10),
@@ -1927,13 +2189,13 @@ class DentalApp(ctk.CTk):
                                anchor="e", padx=5, pady=(1, 5))
 
     def _rontgen_tam_goster(self, r):
-        """Röntgeni tam ekran popup'ta göster"""
+        """Rentgeni tam ekran popup'ta göstər"""
         import base64
         from PIL import Image, ImageTk
         from io import BytesIO
 
         pencere = tk.Toplevel(self)
-        pencere.title(r.get("dosya","Röntgen"))
+        pencere.title(r.get("dosya","Rentgen"))
         pencere.configure(bg="black")
 
         # Ekran boyutunu al
@@ -1985,7 +2247,7 @@ class DentalApp(ctk.CTk):
     def _rontgen_sil(self,idx):
         if not self.aktif_hid: return
         from tkinter import messagebox
-        if not messagebox.askyesno("Sil", "Bu röntgeni silmek istədiyinizə əminsiniz?"):
+        if not messagebox.askyesno(t("Sil"), t("Bu röntgeni silmek istədiyinizə əminsiniz?")):
             return
         h=self.hastalar[self.aktif_hid]
         r=h.get("rontgenler",[])
@@ -2042,7 +2304,7 @@ class DentalApp(ctk.CTk):
 
         def _render(scroll, fotolar, tab):
             if not fotolar:
-                ctk.CTkLabel(scroll, text="Foto yoxdur",
+                ctk.CTkLabel(scroll, text=t("Foto yoxdur"),
                              text_color="#aaa",
                              font=ctk.CTkFont(size=10)).pack(pady=8)
                 return
@@ -2075,7 +2337,7 @@ class DentalApp(ctk.CTk):
                         ctk.CTkLabel(kart, text=f"Yüklenemedi:\n{exc}",
                                      text_color="red",
                                      wraplength=THUMB).pack(padx=4,pady=4)
-                    ctk.CTkButton(kart, text="Sil", width=40, height=18,
+                    ctk.CTkButton(kart, text=t("Sil"), width=40, height=18,
                                    fg_color="#ffeeee", text_color="#cc3333",
                                    hover_color="#ffcccc",
                                    font=ctk.CTkFont(size=9),
@@ -2120,7 +2382,7 @@ class DentalApp(ctk.CTk):
     def _foto_sil(self, idx, tab):
         if not self.aktif_hid or not self.aktif_vid: return
         from tkinter import messagebox
-        if not messagebox.askyesno("Sil", "Bu fotoğrafı silmek istədiyinizə əminsiniz?"):
+        if not messagebox.askyesno(t("Sil"), t("Bu fotoğrafı silmek istədiyinizə əminsiniz?")):
             return
         vaka    = self.hastalar[self.aktif_hid]["vakalar"].get(self.aktif_vid, {})
         key     = {"plan": "fotolar_plan", "tedavi": "fotolar_tedavi",
@@ -2134,21 +2396,21 @@ class DentalApp(ctk.CTk):
     def _tbar(self, parent, row, tab="plan"):
         tb=ctk.CTkFrame(parent,fg_color=TH["panel"],corner_radius=12)
         tb.grid(row=row,column=0,sticky="ew",padx=8,pady=(4,0))
-        ctk.CTkLabel(tb,text="TEDAVİ",font=ctk.CTkFont(size=11,weight="bold"),
-                     text_color=TH["accent"]).pack(side="left",padx=(12,8),pady=8)
         for tid,lbl,rgb in TEDAVILER:
             if tid in ("kok", "curuk") and tab != "ilkin": continue
             if tid == "gozlem" and tab == "ilkin": continue
             renk=f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}" if rgb else "#888888"
-            b=ctk.CTkButton(tb,text=lbl,width=76,height=28,corner_radius=14,
+            metin = t(lbl)
+            btn_w = max(76, 16 + len(metin) * 8)   # uzun etiketlər (məs. "Kompozit Dolğu") sığsın
+            b=ctk.CTkButton(tb,text=metin,width=btn_w,height=28,corner_radius=14,
                              fg_color=tint(renk),hover_color=tint(renk,0.72),
                              text_color=renk,
                              font=ctk.CTkFont(size=12,weight="bold"),
                              command=lambda t=tid:self._tedavi_sec(t))
-            b.pack(side="left",padx=3,pady=8)
+            b.pack(side="left",padx=(10 if tid==TEDAVILER[0][0] else 3, 3),pady=8)
             self.t_btnler.append((tid,b,renk))
-        dt_txt = "Diş Daşı" if tab == "ilkin" else "Diş Daşı Təmizliyi"
-        dt_btn=ctk.CTkButton(tb,text=dt_txt,width=90 if tab=="ilkin" else 150,height=28,corner_radius=14,
+        dt_txt = t("Diş Daşı") if tab == "ilkin" else t("Diş Daşı Təmizliyi")
+        dt_btn=ctk.CTkButton(tb,text=dt_txt,width=max(90 if tab=="ilkin" else 150, 16+len(dt_txt)*8),height=28,corner_radius=14,
                               fg_color=tint("#a020f0"),hover_color=tint("#a020f0",0.72),
                               text_color="#a020f0",
                               font=ctk.CTkFont(size=12,weight="bold"),
@@ -2203,7 +2465,7 @@ class DentalApp(ctk.CTk):
                           text_color="white"   if flag else "#a020f0")
 
     def _step(self,i):
-        adlar = {0: "Plan", 1: "Müalicə", 2: "İlkin Vəziyyət"}
+        adlar = {0: t("Plan"), 1: t("Müalicə"), 2: t("İlkin Vəziyyət")}
         self.tab.set(adlar[i])
         # CTkTabview.set diğer sekmeleri 100ms gecikmeli grid_forget eder;
         # 100ms içinde ikinci bir set çağrısı seçili sekmeyi de gizleyip
@@ -2281,7 +2543,7 @@ class DentalApp(ctk.CTk):
         veri_kaydet(self.hastalar)
         self.arch2.set_tedavi(n, mevcut)
         metin = dis_durum_str(mevcut)
-        self.dis_info2.configure(text=f"Diş {n}\n{dis_adi(n)}\n{metin}")
+        self.dis_info2.configure(text=f"{t('Diş')} {n}\n{dis_adi(n)}\n{metin}")
         self._plan_guncelle2()
 
     def _plan_guncelle2(self):
@@ -2294,10 +2556,10 @@ class DentalApp(ctk.CTk):
         for n_str,durum in sorted(vaka.get("ilkin",{}).items(),key=lambda x:int(x[0])):
             if isinstance(durum,str): durum={"tac":durum,"kanal":False,"kron":False}
             metin = dis_durum_str(durum)
-            if metin=="Sağlıklı": continue
+            if metin==t("Sağlam"): continue
             row=ctk.CTkFrame(self.plan_liste2,fg_color="transparent")
             row.pack(fill="x",pady=2)
-            ctk.CTkLabel(row,text=f"Diş {n_str}",width=52,
+            ctk.CTkLabel(row,text=f"{t('Diş')} {n_str}",width=52,
                          font=ctk.CTkFont(size=11,weight="bold"),
                          text_color="#333").pack(side="left")
             ctk.CTkLabel(row,text=metin,font=ctk.CTkFont(size=11),
@@ -2325,13 +2587,32 @@ class DentalApp(ctk.CTk):
         veri_kaydet(self.hastalar)
         self.arch0.set_tedavi(n, mevcut)
         metin = dis_durum_str(mevcut)
-        self.dis_info.configure(text=f"Diş {n}\n{dis_adi(n)}\n{metin}")
+        self.dis_info.configure(text=f"{t('Diş')} {n}\n{dis_adi(n)}\n{metin}")
         self._plan_guncelle()
+
+    def _tedavi_aksiyon_metni(self, eski, mevcut):
+        """Köhnə/yeni vəziyyəti müqayisə edib, bu klikdə HANSI yeni əməliyyatın
+        aparıldığını (tarixçə sətri üçün) mətn olaraq qaytarır; heç nə
+        dəyişməyibsə (və ya sağlama sıfırlanıbsa) None qaytarır."""
+        if mevcut.get("tac") and mevcut.get("tac") != eski.get("tac"):
+            lbl = next((lbl for tid,lbl,_ in TEDAVILER if tid==mevcut["tac"]), mevcut["tac"])
+            return t(lbl)
+        if mevcut.get("kanal") and not eski.get("kanal"):
+            return t("Kanal")
+        if mevcut.get("kron") and not eski.get("kron"):
+            return t("Qapaq")
+        if mevcut.get("dolgu") and mevcut.get("dolgu") != eski.get("dolgu"):
+            return t("Kompozit Dolğu") + " (" + "".join(mevcut["dolgu"]) + ")"
+        if mevcut.get("curuk") and mevcut.get("curuk") != eski.get("curuk"):
+            return t("Çürük") + " (" + "".join(mevcut["curuk"]) + ")"
+        return None
 
     def _uygula_tedavi(self,n,zone=None):
         if not self.aktif_hid or not self.aktif_vid: return
         h = self.hastalar[self.aktif_hid]
-        tedavi = h["vakalar"][self.aktif_vid].setdefault("tedavi", {})
+        vaka = h["vakalar"][self.aktif_vid]
+        tedavi = vaka.setdefault("tedavi", {})
+        eski = normalize_state(tedavi.get(str(n), {}))
         mevcut = normalize_state(tedavi.get(str(n), {}))
         tid = self.secili_tedavi
         if tid == "saglikli":
@@ -2347,10 +2628,14 @@ class DentalApp(ctk.CTk):
         else:
             mevcut["tac"] = tid
         tedavi[str(n)] = mevcut
+        aksiyon = self._tedavi_aksiyon_metni(eski, mevcut)
+        if aksiyon:
+            vaka.setdefault("tedavi_tarixce", []).append(
+                {"dis": n, "tarix": datetime.now().strftime("%d.%m.%Y"), "aksiyon": aksiyon})
         veri_kaydet(self.hastalar)
         self.arch1.set_tedavi(n, mevcut)
         metin = dis_durum_str(mevcut)
-        self.dis_info1.configure(text=f"Diş {n}\n{dis_adi(n)}\n{metin}")
+        self.dis_info1.configure(text=f"{t('Diş')} {n}\n{dis_adi(n)}\n{metin}")
         self._plan_guncelle1()
 
     def _plan_guncelle1(self):
@@ -2360,17 +2645,15 @@ class DentalApp(ctk.CTk):
         if not self.aktif_hid or not self.aktif_vid: return
         h = self.hastalar[self.aktif_hid]
         vaka = h.get("vakalar",{}).get(self.aktif_vid,{})
-        for n_str,durum in sorted(vaka.get("tedavi",{}).items(),key=lambda x:int(x[0])):
-            if isinstance(durum,str): durum={"tac":durum,"kanal":False,"kron":False}
-            metin = dis_durum_str(durum)
-            if metin=="Sağlıklı": continue
+        for kayit in reversed(vaka.get("tedavi_tarixce", [])):
             row=ctk.CTkFrame(self.plan_liste1,fg_color="transparent")
-            row.pack(fill="x",pady=2)
-            ctk.CTkLabel(row,text=f"Diş {n_str}",width=52,
+            row.pack(fill="x",pady=(2,6))
+            ctk.CTkLabel(row,text=f"{t('Diş')} {kayit['dis']}",anchor="w",
                          font=ctk.CTkFont(size=11,weight="bold"),
-                         text_color="#333").pack(side="left")
-            ctk.CTkLabel(row,text=metin,font=ctk.CTkFont(size=11),
-                         text_color="#1565C0").pack(side="left",padx=4)
+                         text_color="#333").pack(fill="x")
+            ctk.CTkLabel(row,text=f"{kayit['aksiyon']}-{kayit['tarix']}",anchor="w",
+                         justify="left",wraplength=190,font=ctk.CTkFont(size=11),
+                         text_color="#1565C0").pack(fill="x")
 
     def _plan_guncelle(self):
         try:
@@ -2382,10 +2665,10 @@ class DentalApp(ctk.CTk):
         for n_str,durum in sorted(vaka.get("plan",{}).items(),key=lambda x:int(x[0])):
             if isinstance(durum,str): durum={"tac":durum,"kanal":False,"kron":False}
             metin = dis_durum_str(durum)
-            if metin=="Sağlıklı": continue
+            if metin==t("Sağlam"): continue
             row=ctk.CTkFrame(self.plan_liste,fg_color="transparent")
             row.pack(fill="x",pady=2)
-            ctk.CTkLabel(row,text=f"Diş {n_str}",width=52,
+            ctk.CTkLabel(row,text=f"{t('Diş')} {n_str}",width=52,
                          font=ctk.CTkFont(size=11,weight="bold"),
                          text_color="#333").pack(side="left")
             ctk.CTkLabel(row,text=metin,font=ctk.CTkFont(size=11),
@@ -2490,7 +2773,7 @@ class DentalApp(ctk.CTk):
             self.arch0.secili = n0
             self.arch0.ciz()
             durum = normalize_state(plan_data.get(str(n0), {}))
-            self.dis_info.configure(text=f"Diş {n0}\n{dis_adi(n0)}\n{dis_durum_str(durum)}")
+            self.dis_info.configure(text=f"{t('Diş')} {n0}\n{dis_adi(n0)}\n{dis_durum_str(durum)}")
         else:
             self.arch0.secili = None
             self.dis_info.configure(text="—")
@@ -2498,7 +2781,7 @@ class DentalApp(ctk.CTk):
             self.arch1.secili = n1
             self.arch1.ciz()
             durum = normalize_state(tedavi_data.get(str(n1), {}))
-            self.dis_info1.configure(text=f"Diş {n1}\n{dis_adi(n1)}\n{dis_durum_str(durum)}")
+            self.dis_info1.configure(text=f"{t('Diş')} {n1}\n{dis_adi(n1)}\n{dis_durum_str(durum)}")
         else:
             self.arch1.secili = None
             self.dis_info1.configure(text="—")
@@ -2509,7 +2792,7 @@ class DentalApp(ctk.CTk):
             self.arch2.secili = nI
             self.arch2.ciz()
             durum = normalize_state(ilkin_data.get(str(nI), {}))
-            self.dis_info2.configure(text=f"Diş {nI}\n{dis_adi(nI)}\n{dis_durum_str(durum)}")
+            self.dis_info2.configure(text=f"{t('Diş')} {nI}\n{dis_adi(nI)}\n{dis_durum_str(durum)}")
         else:
             self.arch2.secili = None
             self.dis_info2.configure(text="—")
@@ -2630,6 +2913,18 @@ class DentalApp(ctk.CTk):
         elif os.path.exists(self._UE5_EXE):
             subprocess.Popen([self._UE5_EXE])
 
+    def _vr_ui_guncelle(self):
+        """Ayarlar'dakı 'VR Rejimi' açarına görə header'dəki 3 VR düyməsini göstərir/gizlədir."""
+        acit = bool(AYARLAR.get("vr_rejimi", False))
+        dugmeler = [(self._btn_tedaviye_kec, (14,4)),
+                    (self._btn_vr_duzenle, (12,2)),
+                    (self._btn_vr_layout, (2,4))]
+        for btn, padx in dugmeler:
+            if acit:
+                btn.pack(side="left", padx=padx)
+            else:
+                btn.pack_forget()
+
     def _tedaviye_kec(self):
         """Hasta verisini JSON'a yaz, packaged EXE'yi başlat/ön plana getir."""
         import ctypes
@@ -2646,7 +2941,7 @@ class DentalApp(ctk.CTk):
                     durum = {"tac": durum, "kanal": False, "kron": False}
                 txt = dis_durum_str(durum)
                 if txt:
-                    tedavi_lines.append(f"Diş {n_str}: {txt}")
+                    tedavi_lines.append(f"{t('Diş')} {n_str}: {txt}")
             plan_str = "\n".join(tedavi_lines) if tedavi_lines else ""
 
             # Latest x-ray file path (if any rontgen saved as a file)
@@ -2697,13 +2992,13 @@ class DentalApp(ctk.CTk):
 
     def _hasta_menu(self, event, hid):
         menu = tk.Menu(self, tearoff=0)
-        menu.add_command(label="➕  Yeni Vaka",
+        menu.add_command(label=f"➕  {t('Yeni Vaka')}",
                           command=lambda: self._yeni_vaka(hid))
         menu.add_separator()
-        menu.add_command(label="💾  Hastayı Kaydet",
+        menu.add_command(label=f"💾  {t('Hastayı Kaydet')}",
                           command=lambda: self._hasta_kaydet_hizli(hid))
         menu.add_separator()
-        menu.add_command(label="🗑  Hastayı Sil",
+        menu.add_command(label=f"🗑  {t('Hastayı Sil')}",
                           foreground="red",
                           command=lambda: self._hasta_sil(hid))
         try: menu.tk_popup(event.x_root, event.y_root)
@@ -2711,25 +3006,53 @@ class DentalApp(ctk.CTk):
 
     def _vaka_menu(self, event, hid, vid):
         menu = tk.Menu(self, tearoff=0)
-        menu.add_command(label="✏  Vaka Adını Değiştir",
+        menu.add_command(label=f"✏  {t('Vaka Adını Değiştir')}",
                           command=lambda: self._vaka_yeniden_adlandir(hid,vid))
         menu.add_separator()
-        menu.add_command(label="🗑  Vakayı Sil",
+        menu.add_command(label=f"🗑  {t('Vakayı Sil')}",
                           foreground="red",
                           command=lambda: self._vaka_sil(hid,vid))
         try: menu.tk_popup(event.x_root, event.y_root)
         finally: menu.grab_release()
 
     def _yeni_vaka(self, hid):
+        import tkinter.messagebox as mb
         h = self.hastalar[hid]
-        vid = yeni_id("vaka")
         vakalar = h.setdefault("vakalar", {})
+
+        # Köçürüləcək mənbə vaka: aktiv açıq vaka bu hastaya aiddirsə o,
+        # əks halda siyahıdakı son (ən son əlavə edilmiş) vaka.
+        kaynak_vid = None
+        if vakalar:
+            if hid == self.aktif_hid and self.aktif_vid in vakalar:
+                kaynak_vid = self.aktif_vid
+            else:
+                kaynak_vid = list(vakalar.keys())[-1]
+
+        kopyala = False
+        if kaynak_vid:
+            kaynak_ad = vakalar[kaynak_vid].get("ad", "əvvəlki vaka")
+            kopyala = mb.askyesno(
+                t("Yeni Vaka"),
+                f"\"{kaynak_ad}\" içindəki İlkin Vəziyyət və Planlama\n"
+                f"yeni vakaya köçürülsün?",
+                parent=self)
+
+        vid = yeni_id("vaka")
         n = len(vakalar) + 1
-        vakalar[vid] = {
-            "ad": f"{n}. Vaka",
+        yeni = {
+            "ad": f"{n}. {t('Vaka')}",
             "tarih": datetime.now().strftime("%d.%m.%Y"),
             "plan": {}, "tedavi": {}
         }
+        if kopyala and kaynak_vid:
+            kaynak = vakalar[kaynak_vid]
+            yeni["plan"]  = copy.deepcopy(kaynak.get("plan", {}))
+            yeni["ilkin"] = copy.deepcopy(kaynak.get("ilkin", {}))
+            yeni["dis_tasi_temizligi_plan"]  = kaynak.get("dis_tasi_temizligi_plan", False)
+            yeni["dis_tasi_temizligi_ilkin"] = kaynak.get("dis_tasi_temizligi_ilkin", False)
+            yeni["fotolar_ilkin"] = copy.deepcopy(kaynak.get("fotolar_ilkin", []))
+        vakalar[vid] = yeni
         veri_kaydet(self.hastalar)
         self.expanded_hids.add(hid)
         self._lista_guncelle()
@@ -2895,20 +3218,20 @@ class DentalApp(ctk.CTk):
         """Buluddaki hasta id+ad siyahısını göstərib seçilən TƏK hastanı
         (`cloud_pull_one` ilə) yerelə endirir. `names`: [{"hasta_id","ad"}, ...]."""
         dlg = ctk.CTkToplevel(parent, fg_color=TH["bg"])
-        dlg.title("Buluddan Hasta Seç")
+        dlg.title(t("Buluddan Hasta Seç"))
         dlg.geometry("380x460")
         dlg.attributes("-topmost", True)
         dlg.grab_set()
-        ctk.CTkLabel(dlg, text="BULUDDAKI HASTALAR",
+        ctk.CTkLabel(dlg, text=t("BULUDDAKI HASTALAR"),
                      font=ctk.CTkFont(size=11, weight="bold"),
                      text_color=TH["accent"]).pack(anchor="w", padx=16, pady=(16, 2))
         if not names:
-            ctk.CTkLabel(dlg, text="Buludda hasta tapılmadı.",
+            ctk.CTkLabel(dlg, text=t("Buludda hasta tapılmadı."),
                          font=ctk.CTkFont(size=12), text_color=TH["txt_sub"]
                          ).pack(anchor="w", padx=16, pady=(4, 12))
             return
         arama_var = tk.StringVar()
-        ctk.CTkEntry(dlg, textvariable=arama_var, placeholder_text="Ada görə axtar…",
+        ctk.CTkEntry(dlg, textvariable=arama_var, placeholder_text=t("Ada görə axtar…"),
                      height=32, border_color=TH["accent_soft"], fg_color="white"
                      ).pack(fill="x", padx=16, pady=(0, 8))
         liste = ctk.CTkScrollableFrame(dlg, fg_color="white", corner_radius=10)
@@ -2957,7 +3280,7 @@ class DentalApp(ctk.CTk):
         import tkinter.messagebox
         h = self.hastalar.get(hid,{})
         if tkinter.messagebox.askyesno(
-                "Hastayı Sil",
+                t("Hastayı Sil"),
                 f"'{h.get('ad','')}' hastasını silmek istediğinizden emin misiniz?"):
             del self.hastalar[hid]
             veri_kaydet(self.hastalar)
@@ -2976,7 +3299,7 @@ class DentalApp(ctk.CTk):
         import tkinter.messagebox
         v = self.hastalar[hid]["vakalar"].get(vid,{})
         if tkinter.messagebox.askyesno(
-                "Vakayı Sil",
+                t("Vakayı Sil"),
                 f"'{v.get('ad','')}' vakasını silmek istediğinizden emin misiniz?"):
             del self.hastalar[hid]["vakalar"][vid]
             veri_kaydet(self.hastalar)
@@ -2990,8 +3313,8 @@ class DentalApp(ctk.CTk):
 
     def _vaka_yeniden_adlandir(self, hid, vid):
         d = ctk.CTkInputDialog(
-            text="Yeni vaka adı:",
-            title="Vaka Adını Değiştir")
+            text=t("Yeni vaka adı:"),
+            title=t("Vaka Adını Değiştir"))
         yeni = d.get_input()
         if yeni and yeni.strip():
             self.hastalar[hid]["vakalar"][vid]["ad"] = yeni.strip()
@@ -3003,23 +3326,74 @@ class DentalApp(ctk.CTk):
                 self.kart_lbl.configure(
                     text=f"{h.get('ad','')}  ·  {v.get('ad','')}")
 
+    def _dil_uygula(self, yeni_lang):
+        """Dil dəyişəndə bütün açıq pəncərələri (əsas + Ayarlar) təzə dildə
+        yenidən qurur. Cari callback (Ayarlar'dakı düymənin özü) bitmədən
+        onu daşıyan pəncərəni məhv etmək Tcl xətası verə bilər, ona görə
+        yenidənqurma bir toxdan sonra (`after`) icra olunur."""
+        global CURRENT_LANG
+        if yeni_lang == CURRENT_LANG:
+            return
+        CURRENT_LANG = yeni_lang
+        AYARLAR["dil"] = yeni_lang
+        ayar_kaydet(AYARLAR)
+
+        def _yenidenqur():
+            aktif_hid, aktif_vid = self.aktif_hid, self.aktif_vid
+            for w in list(self.winfo_children()):
+                w.destroy()
+            self._build()
+            self._lista_guncelle()
+            if aktif_hid:
+                self.after(10, lambda: self._yukle(hid=aktif_hid, vid=aktif_vid))
+            self.after(20, self._ayarlar_ac)   # istifadəçi Ayarlar'da idi — yeni dildə davam etsin
+
+        self.after(10, _yenidenqur)
+
     def _ayarlar_ac(self):
         from tkinter import filedialog
         import tkinter.messagebox
         win = ctk.CTkToplevel(self, fg_color=TH["bg"])
-        win.title("Ayarlar")
-        win.geometry("640x560")
+        win.title(t("Ayarlar"))
+        win.geometry("560x480")
         win.attributes("-topmost", True)
         win.grab_set()
-        ctk.CTkLabel(win, text="RÖNTGEN KLASÖRÜ",
+
+        tab = ctk.CTkTabview(win, fg_color="transparent",
+                              segmented_button_fg_color=TH["accent_soft"],
+                              segmented_button_selected_color=TH["accent"],
+                              segmented_button_selected_hover_color=TH["accent_hover"],
+                              segmented_button_unselected_color="#8FB0DC",
+                              text_color="white")
+        tab.pack(fill="both", expand=True, padx=12, pady=12)
+        t_umumi = tab.add(t("Ümumi"))
+        t_bulud = tab.add(t("Bulud"))
+        t_haqqinda = tab.add(t("Haqqında"))
+
+        DIL_SECENEKLERI = [("az", "Azərbaycan"), ("en", "English"), ("ru", "Русский"), ("tr", "Türkçe")]
+        DIL_AD_TO_KOD = {ad: kod for kod, ad in DIL_SECENEKLERI}
+        ctk.CTkLabel(t_umumi, text="DİL / LANGUAGE",
                      font=ctk.CTkFont(size=11, weight="bold"),
-                     text_color=TH["accent"]).pack(anchor="w", padx=18, pady=(18, 2))
-        ctk.CTkLabel(win, text="Röntgen programının görüntüleri kaydettiği klasörü seç. Bu klasöre düşen yeni\n"
-                               "görüntüler (bmp / jpg / png / tif" + (" / dcm" if _DCM_OK else "") + ") otomatik yakalanıp açık hastaya eklenir.",
-                     justify="left", font=ctk.CTkFont(size=11),
-                     text_color=TH["txt_sub"]).pack(anchor="w", padx=18)
-        row = ctk.CTkFrame(win, fg_color="transparent")
-        row.pack(fill="x", padx=18, pady=10)
+                     text_color=TH["accent"]).pack(anchor="w", pady=(12, 2))
+        dil_var = tk.StringVar(value=next(ad for kod, ad in DIL_SECENEKLERI if kod == CURRENT_LANG))
+        def _dil_secildi(secim):
+            self._dil_uygula(DIL_AD_TO_KOD.get(secim, "az"))
+        ctk.CTkOptionMenu(t_umumi, values=[ad for _, ad in DIL_SECENEKLERI], variable=dil_var,
+                          width=200, height=32, corner_radius=8,
+                          fg_color=TH["accent_soft"], text_color=TH["accent"],
+                          button_color=TH["accent"], button_hover_color=TH["accent_hover"],
+                          command=_dil_secildi).pack(anchor="w", pady=(0, 10))
+
+        ctk.CTkFrame(t_umumi, height=1, fg_color="#3B5E8F").pack(fill="x", pady=(0, 10))
+
+        ctk.CTkLabel(t_umumi, text=t("RENTGEN QOVLUĞU"),
+                     font=ctk.CTkFont(size=11, weight="bold"),
+                     text_color=TH["accent"]).pack(anchor="w", pady=(12, 2))
+        ctk.CTkLabel(t_umumi, text=t("Rentgen görüntülərinin avtomatik tutulacağı qovluq."),
+                     font=ctk.CTkFont(size=11),
+                     text_color=TH["txt_sub"]).pack(anchor="w")
+        row = ctk.CTkFrame(t_umumi, fg_color="transparent")
+        row.pack(fill="x", pady=(6, 6))
         yol_var = tk.StringVar(value=xray_watch_dir())
         ctk.CTkEntry(row, textvariable=yol_var, height=32,
                      border_color=TH["accent_soft"], fg_color="white").pack(side="left", fill="x", expand=True)
@@ -3028,15 +3402,15 @@ class DentalApp(ctk.CTk):
                                         initialdir=yol_var.get() if os.path.isdir(yol_var.get()) else "C:\\")
             if d:
                 yol_var.set(os.path.normpath(d))
-        ctk.CTkButton(row, text="📂 Gözat…", width=100, height=32,
+        ctk.CTkButton(row, text=t("📂 Gözat…"), width=100, height=32,
                       fg_color=TH["accent"], hover_color=TH["accent_hover"],
                       command=_gozat).pack(side="left", padx=(8, 0))
         alt_var = tk.BooleanVar(value=xray_subdir_only())
-        ctk.CTkCheckBox(win, text="Yalnız alt klasörlere düşen dosyaları al (kökteki geçici dosyaları yoksay)",
+        ctk.CTkCheckBox(t_umumi, text=t("Yalnız alt qovluqlardakı faylları al"),
                         variable=alt_var, font=ctk.CTkFont(size=11),
-                        text_color=TH["txt"]).pack(anchor="w", padx=18, pady=(0, 6))
-        durum = ctk.CTkLabel(win, text="", font=ctk.CTkFont(size=11), text_color=TH["ok"])
-        durum.pack(anchor="w", padx=18)
+                        text_color=TH["txt"]).pack(anchor="w", pady=(0, 4))
+        durum = ctk.CTkLabel(t_umumi, text="", font=ctk.CTkFont(size=11), text_color=TH["ok"])
+        durum.pack(anchor="w")
         def _kaydet():
             yol = yol_var.get().strip()
             AYARLAR["xray_klasoru"] = yol
@@ -3044,27 +3418,41 @@ class DentalApp(ctk.CTk):
             ayar_kaydet(AYARLAR)
             self._restart_xray_watcher()
             if yol and not os.path.isdir(yol):
-                durum.configure(text="⚠ Klasör şu an yok — yol kaydedildi, klasör oluşunca izlenmeye başlanacak.",
+                durum.configure(text="⚠ Qovluq hələ yoxdur — yaranınca izlənəcək.",
                                 text_color="#C0392B")
             else:
-                durum.configure(text="✓ Kaydedildi — klasör izleme yeniden başlatıldı.", text_color=TH["ok"])
-        ctk.CTkButton(win, text="💾 Kaydet", width=120, height=34, corner_radius=10,
+                durum.configure(text="✓ Saxlanıldı.", text_color=TH["ok"])
+        ctk.CTkButton(t_umumi, text=t("💾 Saxla"), width=110, height=32, corner_radius=10,
                       fg_color=TH["accent"], hover_color=TH["accent_hover"],
                       font=ctk.CTkFont(size=12, weight="bold"),
-                      command=_kaydet).pack(anchor="e", padx=18, pady=12)
+                      command=_kaydet).pack(anchor="e", pady=(4, 10))
 
-        ctk.CTkFrame(win, height=1, fg_color="#3B5E8F").pack(fill="x", padx=18, pady=(2, 0))
-        cloud_frame = ctk.CTkFrame(win, fg_color="transparent")
+        ctk.CTkFrame(t_umumi, height=1, fg_color="#3B5E8F").pack(fill="x", pady=(2, 10))
+
+        ctk.CTkLabel(t_umumi, text=t("VR REJİMİ"),
+                     font=ctk.CTkFont(size=11, weight="bold"),
+                     text_color=TH["accent"]).pack(anchor="w", pady=(0, 2))
+        vr_var = tk.BooleanVar(value=bool(AYARLAR.get("vr_rejimi", False)))
+        def _vr_toggle():
+            AYARLAR["vr_rejimi"] = bool(vr_var.get())
+            ayar_kaydet(AYARLAR)
+            self._vr_ui_guncelle()
+        ctk.CTkSwitch(t_umumi, text=t("Header-də \"Tedaviyə Keç / VR Düzenle / Layout Kaydet\" düymələrini göstər"),
+                      variable=vr_var, onvalue=True, offvalue=False, command=_vr_toggle,
+                      font=ctk.CTkFont(size=11), text_color=TH["txt"],
+                      progress_color=TH["accent"]).pack(anchor="w", pady=(2, 10))
+
+        cloud_frame = ctk.CTkFrame(t_bulud, fg_color="transparent")
         cloud_frame.pack(fill="both", expand=True)
 
         def _cloud_section_build():
             for w in cloud_frame.winfo_children(): w.destroy()
-            ctk.CTkLabel(cloud_frame, text="☁ BULUD SENKRONİZASYONU",
+            ctk.CTkLabel(cloud_frame, text=t("☁ BULUD SENKRONİZASYONU"),
                          font=ctk.CTkFont(size=11, weight="bold"),
                          text_color=TH["accent"]).pack(anchor="w", padx=18, pady=(14, 2))
             if not cloud_configured():
                 ctk.CTkLabel(cloud_frame,
-                             text="Bulud sunucusu hələ qurulmayıb — proqram yalnız yerel işləyir.",
+                             text=t("Bulud sunucusu hələ qurulmayıb — proqram yalnız yerel işləyir."),
                              font=ctk.CTkFont(size=11), text_color=TH["txt_sub"]
                              ).pack(anchor="w", padx=18, pady=(0, 12))
                 return
@@ -3134,8 +3522,8 @@ class DentalApp(ctk.CTk):
                     if busy2["on"]: return
                     if not tkinter.messagebox.askyesno(
                             "Buluddan Yenilə",
-                            "Buluddakı verilər yerel verilərin üzərinə yazılacaq "
-                            "(hər iki tərəfdə eyni hasta varsa buludtakı qalacaq).\n\nDavam edilsin?",
+                            t("Buluddakı verilər yerel verilərin üzərinə yazılacaq "
+                            "(hər iki tərəfdə eyni hasta varsa buludtakı qalacaq).\n\nDavam edilsin?"),
                             parent=win):
                         return
                     _set_busy2(True)
@@ -3185,38 +3573,38 @@ class DentalApp(ctk.CTk):
                     self._cloud_status_guncelle()
                     _cloud_section_build()
 
-                push_btn = ctk.CTkButton(btn_row, text="☁ Buluda Yüklə", width=140, height=30,
+                push_btn = ctk.CTkButton(btn_row, text=t("☁ Buluda Yüklə"), width=140, height=30,
                               fg_color=TH["accent"], hover_color=TH["accent_hover"],
                               command=_push)
                 push_btn.pack(side="left", padx=(0, 6))
-                pull_btn = ctk.CTkButton(btn_row, text="☁ Buluddan Yenilə", width=150, height=30,
+                pull_btn = ctk.CTkButton(btn_row, text=t("☁ Buluddan Yenilə"), width=150, height=30,
                               fg_color=TH["indigo"], hover_color=TH["indigo_hover"],
                               command=_pull)
                 pull_btn.pack(side="left", padx=(0, 6))
-                pull_one_btn = ctk.CTkButton(btn_row, text="☁ Hasta Seç…", width=130, height=30,
+                pull_one_btn = ctk.CTkButton(btn_row, text=t("☁ Hasta Seç…"), width=130, height=30,
                               fg_color="transparent", border_width=1, border_color=TH["indigo"],
                               text_color=TH["indigo"], hover_color=TH["accent_soft"],
                               command=_pull_one)
                 pull_one_btn.pack(side="left", padx=(0, 6))
-                logout_btn = ctk.CTkButton(btn_row, text="Çıxış", width=80, height=30,
+                logout_btn = ctk.CTkButton(btn_row, text=t("Çıxış"), width=80, height=30,
                               fg_color="transparent", border_width=1, border_color="#3B5E8F",
                               text_color="#B9CDEB", command=_logout)
                 logout_btn.pack(side="left")
                 cstatus.pack(anchor="w", padx=18, pady=(6, 12))
             else:
                 ctk.CTkLabel(cloud_frame,
-                             text="Hekim hesabı ilə giriş edin — eyni hesabla giriş edilən bütün\n"
-                                  "kompüterlər hasta verilərini avtomatik paylaşır.",
+                             text=t("Hekim hesabı ilə giriş edin — eyni hesabla giriş edilən bütün\n"
+                                  "kompüterlər hasta verilərini avtomatik paylaşır."),
                              justify="left", font=ctk.CTkFont(size=11),
                              text_color=TH["txt_sub"]).pack(anchor="w", padx=18, pady=(0, 8))
                 erow = ctk.CTkFrame(cloud_frame, fg_color="transparent")
                 erow.pack(fill="x", padx=18, pady=(0, 4))
                 email_var = tk.StringVar(value=AYARLAR.get("sb_email", ""))
                 pass_var = tk.StringVar()
-                ctk.CTkEntry(erow, textvariable=email_var, placeholder_text="E-poçt", height=32,
+                ctk.CTkEntry(erow, textvariable=email_var, placeholder_text=t("E-poçt"), height=32,
                              border_color=TH["accent_soft"], fg_color="white"
                              ).pack(side="left", fill="x", expand=True, padx=(0, 6))
-                ctk.CTkEntry(erow, textvariable=pass_var, placeholder_text="Şifrə", show="•", height=32,
+                ctk.CTkEntry(erow, textvariable=pass_var, placeholder_text=t("Şifrə"), show="•", height=32,
                              border_color=TH["accent_soft"], fg_color="white", width=140
                              ).pack(side="left")
                 cstatus = ctk.CTkLabel(cloud_frame, text="", font=ctk.CTkFont(size=11),
@@ -3309,11 +3697,11 @@ class DentalApp(ctk.CTk):
 
                 brow = ctk.CTkFrame(cloud_frame, fg_color="transparent")
                 brow.pack(anchor="w", padx=18, pady=(0, 4))
-                login_btn = ctk.CTkButton(brow, text="Giriş Et", width=100, height=30,
+                login_btn = ctk.CTkButton(brow, text=t("Giriş Et"), width=100, height=30,
                               fg_color=TH["accent"], hover_color=TH["accent_hover"],
                               command=_login)
                 login_btn.pack(side="left", padx=(0, 6))
-                signup_btn = ctk.CTkButton(brow, text="Hesab Yarat", width=110, height=30,
+                signup_btn = ctk.CTkButton(brow, text=t("Hesab Yarat"), width=110, height=30,
                               fg_color="transparent", border_width=1, border_color="#3B5E8F",
                               text_color="#B9CDEB", command=_signup)
                 signup_btn.pack(side="left")
@@ -3321,18 +3709,475 @@ class DentalApp(ctk.CTk):
 
         _cloud_section_build()
 
-        ctk.CTkFrame(win, height=1, fg_color="#3B5E8F").pack(fill="x", padx=18, pady=(6, 0))
-        guncelleme_row = ctk.CTkFrame(win, fg_color="transparent")
-        guncelleme_row.pack(fill="x", padx=18, pady=(10, 14))
-        ctk.CTkLabel(guncelleme_row, text=f"Sürüm: v{APP_VERSION}",
-                     font=ctk.CTkFont(size=11), text_color=TH["txt_sub"]).pack(side="left")
-        ctk.CTkButton(guncelleme_row, text="🔄 Güncellemeleri Kontrol Et", width=200, height=30,
+        ctk.CTkLabel(t_haqqinda, text=f"Sürüm: v{APP_VERSION}",
+                     font=ctk.CTkFont(size=13, weight="bold"), text_color=TH["txt"]
+                     ).pack(pady=(30, 10))
+        ctk.CTkButton(t_haqqinda, text=t("🔄 Güncellemeleri Kontrol Et"), width=200, height=32,
                       fg_color=TH["accent"], hover_color=TH["accent_hover"],
                       command=lambda: self._guncelleme_kontrol_et(sessiz=False)
-                      ).pack(side="right")
+                      ).pack()
+
+    # ── Randevu Təqvimi ──────────────────────────────────────────────────
+    # ── Randevu vaxtı çatanda avtomatik "gəldi" təsdiqi ─────────────────────
+    def _randevu_tick(self):
+        try:
+            indi = datetime.now()
+            for rid, r in list(self.randevular.items()):
+                if r.get("status") != "gozleyir" or rid in self._randevu_prompted:
+                    continue
+                try:
+                    baslangic = datetime.strptime(f"{r['tarix']} {r.get('saat','09:00')}", "%Y-%m-%d %H:%M")
+                except Exception:
+                    continue
+                if baslangic <= indi:
+                    self._randevu_prompted.add(rid)
+                    self._randevu_confirm_dialog(rid, r)
+        except Exception as e:
+            print(f"[Randevu] tick xətası: {e}")
+        self.after(30000, self._randevu_tick)
+
+    def _randevu_confirm_dialog(self, rid, r):
+        dlg = ctk.CTkToplevel(self, fg_color=TH["bg"])
+        dlg.title(t("Randevu Vaxtı"))
+        dlg.geometry("380x220")
+        dlg.attributes("-topmost", True)
+        ctk.CTkLabel(dlg, text=t("🕒 Randevu vaxtı çatdı"), font=ctk.CTkFont(size=16, weight="bold"),
+                     text_color=TH["accent"]).pack(pady=(20,6))
+        ctk.CTkLabel(dlg, text=f"{r.get('hasta_ad','')}  ·  saat {r.get('saat','')}",
+                     font=ctk.CTkFont(size=14, weight="bold"), text_color=TH["txt"]).pack(pady=2)
+        ctk.CTkLabel(dlg, text=t("Bu xəstə gəldi kimi qeyd edilsin?"),
+                     font=ctk.CTkFont(size=12), text_color=TH["txt_sub"]).pack(pady=(2,10))
+        geri_sayim_lbl = ctk.CTkLabel(dlg, text="", font=ctk.CTkFont(size=10), text_color=TH["txt_faint"])
+        geri_sayim_lbl.pack()
+
+        bitdi = {"v": False}
+
+        def _qeyd_et():
+            if bitdi["v"]: return
+            bitdi["v"] = True
+            r2 = self.randevular.get(rid)
+            if r2:
+                r2["status"] = "geldi"
+                randevu_kaydet(self.randevular)
+            try: dlg.destroy()
+            except Exception: pass
+
+        def _legv():
+            bitdi["v"] = True
+            try: dlg.destroy()
+            except Exception: pass
+
+        btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
+        btn_row.pack(pady=10)
+        ctk.CTkButton(btn_row, text=t("✓ Gəldi"), width=110, height=34, corner_radius=10,
+                      fg_color=TH["ok"], hover_color=TH["ok_hover"],
+                      font=ctk.CTkFont(size=12, weight="bold"), command=_qeyd_et).pack(side="left", padx=6)
+        ctk.CTkButton(btn_row, text=t("Sonra"), width=110, height=34, corner_radius=10,
+                      fg_color="transparent", border_width=1, border_color=TH["accent_soft"],
+                      text_color=TH["accent"], command=_legv).pack(side="left", padx=6)
+
+        qalan = {"saniye": 120}
+        def _geri_sayim():
+            if bitdi["v"]:
+                return
+            try:
+                geri_sayim_lbl.configure(
+                    text=f"{qalan['saniye']} saniyə sonra avtomatik 'Gəldi' qəbul ediləcək")
+            except Exception:
+                return
+            if qalan["saniye"] <= 0:
+                _qeyd_et()
+                return
+            qalan["saniye"] -= 1
+            dlg.after(1000, _geri_sayim)
+        _geri_sayim()
+
+    def _randevu_ac(self):
+        import tkinter.messagebox as mb
+        win = ctk.CTkToplevel(self, fg_color=TH["bg"])
+        win.title(t("Randevu Təqvimi"))
+        win.geometry("1380x860")
+        win.after(50, lambda: win.state("zoomed"))   # 08-22 tam sığsın deyə böyüdülmüş açılır
+        # QƏSDƏN topmost/grab_set YOXDUR — bu pəncərə arxa planda açıq qalıb istifadəçi
+        # eyni vaxtda əsas planlama pəncərəsində işləyə bilsin (minimize/keçid sərbəst olsun).
+        win.grid_columnconfigure(0, weight=1)
+        win.grid_rowconfigure(1, weight=1)
+
+        GUN_QISA = ["B.e","Ç.a","Ç","C.a","C","Ş","B"]
+        AY_QISA  = ["Yan","Fev","Mar","Apr","May","İyn","İyl",
+                    "Avq","Sen","Okt","Noy","Dek"]
+        GOVDE_YUKSEKLIK = (RANDEVU_SAAT_SONU - RANDEVU_SAAT_BASI) * RANDEVU_SAAT_PX
+
+        # CTk widgetləri (bant/gridxətt/saat etiketi) place() zamanı ekran DPI-na görə
+        # avtomatik miqyaslanır (məs. 125% DPI-da 1.25x), amma bloklar üçün istifadə
+        # olunan tk.Canvas (plain tkinter) bu miqyaslamanı ALMIR — nəticədə saat
+        # xətləri ilə randevu blokları get-gedə (aşağı sətirlərdə daha çox) sürüşürdü.
+        # `olcek` bu fərqi əl ilə kompensasiya edir.
+        olcek = ctk.ScalingTracker.get_widget_scaling(win) or 1.0
+
+        def hafte_bas(iso):
+            d = date.fromisoformat(iso)
+            return (d - timedelta(days=d.weekday())).isoformat()
+
+        def y_px(saat_str):
+            """Məntiqi (miqyaslanmamış) piksel — saat mətnindən sətir mövqeyi."""
+            try:
+                hh, mm = map(int, saat_str.split(":"))
+            except Exception:
+                hh, mm = RANDEVU_SAAT_BASI, 0
+            dakika = (hh - RANDEVU_SAAT_BASI) * 60 + mm
+            dakika = max(0, min(dakika, (RANDEVU_SAAT_SONU - RANDEVU_SAAT_BASI) * 60))
+            return dakika * (RANDEVU_SAAT_PX / 60)
+
+        def h_px(muddet_dk):
+            """Məntiqi (miqyaslanmamış) piksel — müddətdən blok hündürlüyü."""
+            return max(18, muddet_dk * (RANDEVU_SAAT_PX / 60))
+
+        def px_to_saat(y_fiziki):
+            """Canvas-dan gələn FİZİKİ (ekran) pikseli məntiqi vahidə çevirib saata çevirir."""
+            y = y_fiziki / olcek
+            dakika = int(y / (RANDEVU_SAAT_PX / 60))
+            dakika = max(0, min(dakika, (RANDEVU_SAAT_SONU - RANDEVU_SAAT_BASI) * 60))
+            dakika = round(dakika / 5) * 5
+            hh = RANDEVU_SAAT_BASI + dakika // 60
+            mm = dakika % 60
+            return f"{hh:02d}:{mm:02d}"
+
+        state = {"hafte": hafte_bas(date.today().isoformat())}
+
+        # ── Üst: naviqasiya ──
+        ust = ctk.CTkFrame(win, fg_color=TH["panel"], corner_radius=14, height=56)
+        ust.grid(row=0, column=0, sticky="ew", padx=16, pady=(16,8)); ust.grid_propagate(False)
+        ctk.CTkButton(ust, text="‹", width=36, height=36, corner_radius=10,
+                      fg_color=TH["accent_soft"], text_color=TH["accent"],
+                      hover_color=TH["sidebar_row"],
+                      command=lambda: _hafte_kaydir(-1)).pack(side="left", padx=(14,4), pady=10)
+        baslik_lbl = ctk.CTkLabel(ust, text="", font=ctk.CTkFont(size=15, weight="bold"),
+                                   text_color=TH["txt"])
+        baslik_lbl.pack(side="left", padx=10)
+        ctk.CTkButton(ust, text="›", width=36, height=36, corner_radius=10,
+                      fg_color=TH["accent_soft"], text_color=TH["accent"],
+                      hover_color=TH["sidebar_row"],
+                      command=lambda: _hafte_kaydir(1)).pack(side="left", padx=4, pady=10)
+        ctk.CTkButton(ust, text=t("Bu Həftə"), width=90, height=32, corner_radius=8,
+                      fg_color="transparent", border_width=1, border_color=TH["accent_soft"],
+                      text_color=TH["accent"], hover_color=TH["sidebar_row"],
+                      command=lambda: _bu_hafte()).pack(side="left", padx=(10,0), pady=10)
+        ctk.CTkLabel(ust, text=t("İpucu: boş xanaya klikləyib o saata randevu əlavə et"),
+                     font=ctk.CTkFont(size=10), text_color=TH["txt_faint"]).pack(side="left", padx=(16,0))
+        ctk.CTkButton(ust, text=t("+ Yeni Randevu"), height=36, corner_radius=10,
+                      fg_color=TH["accent"], hover_color=TH["accent_hover"],
+                      font=ctk.CTkFont(size=12, weight="bold"),
+                      command=lambda: _form_ac()).pack(side="right", padx=14, pady=10)
+        ctk.CTkButton(ust, text=t("🎨 Rənglər"), width=110, height=32, corner_radius=8,
+                      fg_color="transparent", border_width=1, border_color=TH["accent_soft"],
+                      text_color=TH["accent"], hover_color=TH["sidebar_row"],
+                      command=lambda: _renk_ayarlari_ac()).pack(side="right", padx=(0,8), pady=10)
+
+        # ── Cədvəl: saat oxu + 7 gün sütunu ──
+        cedvel = ctk.CTkFrame(win, fg_color="transparent")
+        cedvel.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0,16))
+        cedvel.grid_columnconfigure(0, weight=0, minsize=64)
+        for i in range(7):
+            cedvel.grid_columnconfigure(i+1, weight=1, uniform="gun")
+        cedvel.grid_rowconfigure(1, weight=1)
+
+        ctk.CTkFrame(cedvel, fg_color="transparent", height=52).grid(
+            row=0, column=0, sticky="ew", pady=(0,4))
+        baslik_hucreleri = []
+        for i in range(7):
+            hb = ctk.CTkFrame(cedvel, corner_radius=10, height=52)
+            hb.grid(row=0, column=i+1, sticky="ew", padx=3, pady=(0,4)); hb.grid_propagate(False)
+            gun_ad_lbl = ctk.CTkLabel(hb, text="", font=ctk.CTkFont(size=11, weight="bold"))
+            gun_ad_lbl.pack(pady=(8,0))
+            gun_tarix_lbl = ctk.CTkLabel(hb, text="", font=ctk.CTkFont(size=13, weight="bold"))
+            gun_tarix_lbl.pack()
+            baslik_hucreleri.append((hb, gun_ad_lbl, gun_tarix_lbl))
+
+        # Saat oxu + gün sütunları bir ŞAQULI SÜRÜŞDÜRÜLƏ BİLƏN sahədə (günlərin başlığı
+        # yuxarıda sabit qalır) — 08-22 aralığı istənilən ekran hündürlüyündə görünsün deyə
+        # (böyüdülmüş pəncərə belə hər zaman tam sığmaya bilər).
+        govde = ctk.CTkScrollableFrame(cedvel, fg_color="transparent")
+        govde.grid(row=1, column=0, columnspan=8, sticky="nsew")
+        govde.grid_columnconfigure(0, weight=0, minsize=64)
+        for i in range(7):
+            govde.grid_columnconfigure(i+1, weight=1, uniform="gun")
+
+        SAAT_XETT_RENGI = "#A9C0E0"   # saat sərhədləri — panelin ağ zeminində aydın görünsün deyə TH["accent_soft"]-dan qatı
+        BANT_ACIQ, BANT_TUND = TH["panel"], "#F1F6FD"   # cüt/tək saatlar arası zolaqlama (əsl gridxətt effekti)
+
+        saat_ekseni = ctk.CTkFrame(govde, fg_color="transparent", height=GOVDE_YUKSEKLIK)
+        saat_ekseni.grid(row=0, column=0, sticky="new"); saat_ekseni.grid_propagate(False)
+        for h_i, saat_deger in enumerate(range(RANDEVU_SAAT_BASI, RANDEVU_SAAT_SONU + 1)):
+            ctk.CTkLabel(saat_ekseni, text=f"{saat_deger:02d}:00",
+                         font=ctk.CTkFont(size=13, weight="bold"),
+                         text_color=TH["txt"]).place(x=4, y=h_i * RANDEVU_SAAT_PX - 9)
+
+        gun_frameleri, gun_bantlari = [], []
+        for i in range(7):
+            gf = ctk.CTkFrame(govde, fg_color=TH["panel"], corner_radius=10, height=GOVDE_YUKSEKLIK)
+            gf.grid(row=0, column=i+1, sticky="new", padx=3); gf.grid_propagate(False)
+            bantlar = []
+            for h_i in range(RANDEVU_SAAT_SONU - RANDEVU_SAAT_BASI):
+                bant = ctk.CTkFrame(gf, corner_radius=0, cursor="hand2",
+                                     fg_color=BANT_ACIQ if h_i % 2 == 0 else BANT_TUND,
+                                     height=RANDEVU_SAAT_PX)
+                bant.place(x=0, y=h_i * RANDEVU_SAAT_PX, relwidth=1)
+                bantlar.append(bant)
+            for h_i in range(RANDEVU_SAAT_SONU - RANDEVU_SAAT_BASI + 1):
+                ctk.CTkFrame(gf, height=2, fg_color=SAAT_XETT_RENGI).place(
+                    x=0, y=h_i * RANDEVU_SAAT_PX, relwidth=1)
+            gun_frameleri.append(gf)
+            gun_bantlari.append(bantlar)
+
+        def _gun_randevulari(gun_iso):
+            return [(rid, r) for rid, r in self.randevular.items() if r.get("tarix") == gun_iso]
+
+        def _hafte_kaydir(delta):
+            state["hafte"] = (date.fromisoformat(state["hafte"]) + timedelta(weeks=delta)).isoformat()
+            _ciz()
+
+        def _bu_hafte():
+            state["hafte"] = hafte_bas(date.today().isoformat())
+            _ciz()
+
+        def _bos_alana_tikla(e, iso, taban_px):
+            # taban_px məntiqi vahiddədir (bant indeksindən); e.y isə bandın öz
+            # fiziki (miqyaslanmış) koordinat sistemindən gəlir — əvvəlcə eyni vahidə salırıq.
+            _form_ac(gun_iso=iso, on_saat=px_to_saat(taban_px * olcek + e.y))
+
+        def _kecmis_mi(r):
+            try:
+                baslangic = datetime.strptime(f"{r['tarix']} {r.get('saat','09:00')}", "%Y-%m-%d %H:%M")
+                bitis = baslangic + timedelta(minutes=int(r.get("muddet", 30) or 30))
+                return bitis < datetime.now()
+            except Exception:
+                return False
+
+        def _ciz():
+            win.update()   # sütun eni doğru ölçülsün deyə bloklardan əvvəl (tam update, təkcə idle-tasks yox)
+            bas = date.fromisoformat(state["hafte"])
+            son = bas + timedelta(days=6)
+            baslik_lbl.configure(
+                text=f"{bas.day} {t(AY_QISA[bas.month-1])} – {son.day} {t(AY_QISA[son.month-1])} {son.year}")
+            bugun = date.today().isoformat()
+            for i in range(7):
+                gun_tarihi = bas + timedelta(days=i)
+                iso = gun_tarihi.isoformat()
+                aktif = iso == bugun
+                hb, gun_ad_lbl, gun_tarix_lbl = baslik_hucreleri[i]
+                hb.configure(fg_color=TH["accent"] if aktif else TH["panel"])
+                gun_ad_lbl.configure(text=t(GUN_QISA[i]), text_color="white" if aktif else TH["txt_faint"])
+                gun_tarix_lbl.configure(text=str(gun_tarihi.day), text_color="white" if aktif else TH["txt"])
+
+                gf = gun_frameleri[i]
+                for w in list(gf.winfo_children()):
+                    if getattr(w, "_rndv_blok", False):
+                        w.destroy()
+                for h_i, bant in enumerate(gun_bantlari[i]):
+                    bant.unbind("<Button-1>")
+                    taban_px = h_i * RANDEVU_SAAT_PX
+                    bant.bind("<Button-1>", lambda e, iso=iso, taban_px=taban_px: _bos_alana_tikla(e, iso, taban_px))
+                kol_genislik = max(gf.winfo_width() - 4, 60)
+                for rid, r in _gun_randevulari(iso):
+                    _render_blok(gf, rid, r, kol_genislik)
+
+        def _render_blok(gf, rid, r, kol_genislik):
+            saat = r.get("saat", "09:00")
+            muddet = int(r.get("muddet", 30) or 30)
+            renk = randevu_renk(r.get("status", "gozleyir"))
+            # h_px/y_px məntiqi vahiddədir — Canvas plain-tk olduğu üçün CTk-nin
+            # avtomatik DPI miqyaslamasından keçmir, ona görə burda əl ilə tətbiq edilir
+            # (əks halda bloklar saat xətlərindən aşağı sətirlərdə get-gedə sürüşürdü).
+            yukseklik = max(round(h_px(muddet) * olcek), 1)
+            kecmis = _kecmis_mi(r)
+
+            # tk.Canvas — CTk widgetlərin place() ilə width/height qəbul etməməsi
+            # məhdudiyyətindən yan keçir, həm də tam-dolu rəng + ştrix çəkməyə imkan verir.
+            # Canvas-ın öz bg-si = status rəngi, ona görə kənarlar/künclər həmişə tam örtülü olur.
+            cv = tk.Canvas(gf, width=kol_genislik, height=yukseklik,
+                            highlightthickness=0, bd=0, cursor="hand2", bg=renk)
+            cv._rndv_blok = True
+            cv.place(x=2, y=round(y_px(saat) * olcek))
+
+            if kecmis:
+                acik = tint(renk, 0.4)
+                adim = 9
+                for x in range(-yukseklik, kol_genislik + yukseklik, adim):
+                    cv.create_line(x, yukseklik, x + yukseklik, 0, fill=acik, width=1)
+
+            cv.create_text(6, 3, text=f"{saat} · {r.get('hasta_ad','')}", anchor="nw",
+                            fill="white", font=("Segoe UI", 9, "bold"),
+                            width=kol_genislik - (22 if yukseklik >= 28 else 8))
+            qeyd = r.get("qeyd", "").strip()
+            if qeyd and yukseklik >= 38:
+                cv.create_text(6, 18, text=qeyd, anchor="nw",
+                                fill="white", font=("Segoe UI", 8),
+                                width=kol_genislik - 10)
+            cv.bind("<Button-1>", lambda e, rid=rid: _form_ac(rid))
+            if yukseklik >= 28:
+                sil_id = cv.create_text(kol_genislik - 8, 3, text="✕", anchor="ne",
+                                         fill="white", font=("Segoe UI", 10, "bold"))
+                def _sil_tikla(e, rid=rid):
+                    _sil(rid)
+                    return "break"
+                cv.tag_bind(sil_id, "<Button-1>", _sil_tikla)
+
+        def _sil(rid):
+            if not mb.askyesno(t("Randevunu sil"), t("Bu randevunu silmək istədiyinizə əminsiniz?"), parent=win):
+                return
+            self.randevular.pop(rid, None)
+            randevu_kaydet(self.randevular)
+            _ciz()
+
+        def _renk_ayarlari_ac():
+            from tkinter import colorchooser
+            dlg = ctk.CTkToplevel(win, fg_color=TH["bg"])
+            dlg.title(t("Randevu Rəngləri"))
+            dlg.geometry("320x300")
+            dlg.attributes("-topmost", True)
+            dlg.grab_set()
+            ctk.CTkLabel(dlg, text=t("STATUS RƏNGLƏRİ"), font=ctk.CTkFont(size=12, weight="bold"),
+                         text_color=TH["accent"]).pack(pady=(18,10))
+
+            def _yenidenCiz_swatchlar():
+                for w in list(satirlar.winfo_children()): w.destroy()
+                for k, l, _ in RANDEVU_STATUS:
+                    row = ctk.CTkFrame(satirlar, fg_color="transparent")
+                    row.pack(fill="x", padx=18, pady=4)
+                    ctk.CTkLabel(row, text=t(l), width=120, anchor="w",
+                                 font=ctk.CTkFont(size=12)).pack(side="left")
+                    ctk.CTkButton(row, text="", width=70, height=28, corner_radius=6,
+                                  fg_color=randevu_renk(k), hover_color=randevu_renk(k),
+                                  command=lambda k=k: _renk_sec(k)).pack(side="left", padx=8)
+
+            def _renk_sec(k):
+                secim = colorchooser.askcolor(color=randevu_renk(k), parent=dlg, title="Rəng seç")
+                if secim and secim[1]:
+                    ozel = AYARLAR.setdefault("randevu_renkler", {})
+                    ozel[k] = secim[1]
+                    ayar_kaydet(AYARLAR)
+                    _yenidenCiz_swatchlar()
+                    _ciz()
+
+            satirlar = ctk.CTkFrame(dlg, fg_color="transparent")
+            satirlar.pack(fill="x")
+            _yenidenCiz_swatchlar()
+
+            def _sifirla():
+                AYARLAR["randevu_renkler"] = {}
+                ayar_kaydet(AYARLAR)
+                _yenidenCiz_swatchlar()
+                _ciz()
+
+            ctk.CTkButton(dlg, text=t("Defolt Rənglərə Sıfırla"), height=32, corner_radius=8,
+                          fg_color="transparent", border_width=1, border_color=TH["accent_soft"],
+                          text_color=TH["accent"], hover_color=TH["sidebar_row"],
+                          command=_sifirla).pack(pady=16)
+
+        def _form_ac(rid=None, gun_iso=None, on_saat=None):
+            mevcut = self.randevular.get(rid, {}) if rid else {}
+            dlg = ctk.CTkToplevel(win, fg_color=TH["bg"])
+            dlg.title("Randevu" if not rid else "Randevunu Düzenlə")
+            dlg.geometry("360x620")
+            dlg.attributes("-topmost", True)
+            dlg.grab_set()
+
+            ctk.CTkLabel(dlg, text=t("HASTA"), font=ctk.CTkFont(size=11, weight="bold"),
+                         text_color=TH["accent"]).pack(anchor="w", padx=18, pady=(16,2))
+            isimler = sorted({h.get("ad", "") for h in self.hastalar.values() if h.get("ad")})
+            hasta_var = tk.StringVar(value=mevcut.get("hasta_ad", ""))
+            ctk.CTkComboBox(dlg, values=isimler, variable=hasta_var,
+                             width=320, height=32, border_color=TH["accent_soft"]
+                             ).pack(padx=18)
+
+            ctk.CTkLabel(dlg, text=t("TARİX (gg.aa.yyyy)"), font=ctk.CTkFont(size=11, weight="bold"),
+                         text_color=TH["accent"]).pack(anchor="w", padx=18, pady=(12,2))
+            varsayilan_iso = mevcut.get("tarix") or gun_iso or date.today().isoformat()
+            tarih_var = tk.StringVar(value=datetime.strptime(varsayilan_iso, "%Y-%m-%d").strftime("%d.%m.%Y"))
+            ctk.CTkEntry(dlg, textvariable=tarih_var, width=320, height=32,
+                         border_color=TH["accent_soft"]).pack(padx=18)
+
+            ctk.CTkLabel(dlg, text=t("SAAT (ss:dd)"), font=ctk.CTkFont(size=11, weight="bold"),
+                         text_color=TH["accent"]).pack(anchor="w", padx=18, pady=(12,2))
+            saat_var = tk.StringVar(value=mevcut.get("saat") or on_saat or "09:00")
+            ctk.CTkEntry(dlg, textvariable=saat_var, width=320, height=32,
+                         border_color=TH["accent_soft"]).pack(padx=18)
+
+            ctk.CTkLabel(dlg, text=t("NƏ QƏDƏR VAXT AYRILSIN?"), font=ctk.CTkFont(size=11, weight="bold"),
+                         text_color=TH["accent"]).pack(anchor="w", padx=18, pady=(12,2))
+            mevcut_muddet = int(mevcut.get("muddet", 30) or 30)
+            muddet_var = tk.StringVar(value=f"{mevcut_muddet} {t('dəqiqə')}")
+            ctk.CTkOptionMenu(dlg, values=[f"{m} {t('dəqiqə')}" for m in RANDEVU_MUDDETLER], variable=muddet_var,
+                              width=320, height=32, corner_radius=8,
+                              fg_color=TH["accent_soft"], text_color=TH["accent"],
+                              button_color=TH["accent"], button_hover_color=TH["accent_hover"]
+                              ).pack(padx=18)
+
+            ctk.CTkLabel(dlg, text=t("STATUS"), font=ctk.CTkFont(size=11, weight="bold"),
+                         text_color=TH["accent"]).pack(anchor="w", padx=18, pady=(12,2))
+            status_var = tk.StringVar(value=t(RANDEVU_STATUS_LBL.get(mevcut.get("status", "gozleyir"))))
+            ctk.CTkOptionMenu(dlg, values=[t(l) for _, l, _ in RANDEVU_STATUS], variable=status_var,
+                              width=320, height=32, corner_radius=8,
+                              fg_color=TH["accent_soft"], text_color=TH["accent"],
+                              button_color=TH["accent"], button_hover_color=TH["accent_hover"]
+                              ).pack(padx=18)
+
+            ctk.CTkLabel(dlg, text=t("QEYD"), font=ctk.CTkFont(size=11, weight="bold"),
+                         text_color=TH["accent"]).pack(anchor="w", padx=18, pady=(12,2))
+            qeyd_box = ctk.CTkTextbox(dlg, width=320, height=60)
+            qeyd_box.pack(padx=18)
+            if mevcut.get("qeyd"):
+                qeyd_box.insert("1.0", mevcut["qeyd"])
+
+            hata_lbl = ctk.CTkLabel(dlg, text="", font=ctk.CTkFont(size=11), text_color="#C0392B")
+            hata_lbl.pack(padx=18, pady=(6,0), anchor="w")
+
+            def _kaydet_form():
+                ad = hasta_var.get().strip()
+                if not ad:
+                    hata_lbl.configure(text=t("Hasta adı boş ola bilməz.")); return
+                try:
+                    iso = datetime.strptime(tarih_var.get().strip(), "%d.%m.%Y").strftime("%Y-%m-%d")
+                except ValueError:
+                    hata_lbl.configure(text=t("Tarix formatı yanlışdır (gg.aa.yyyy).")); return
+                saat = saat_var.get().strip() or "09:00"
+                try:
+                    muddet = int(muddet_var.get().split()[0])
+                except Exception:
+                    muddet = 30
+                secilen_status = next((k for k, l, _ in RANDEVU_STATUS if t(l) == status_var.get()), "gozleyir")
+                eslesen_hid = next((hid for hid, h in self.hastalar.items() if h.get("ad", "") == ad), None)
+                rid2 = rid or yeni_id("randevu")
+                self.randevular[rid2] = {
+                    "hasta_id": eslesen_hid,
+                    "hasta_ad": ad,
+                    "tarix": iso,
+                    "saat": saat,
+                    "muddet": muddet,
+                    "qeyd": qeyd_box.get("1.0", "end").strip(),
+                    "status": secilen_status,
+                }
+                randevu_kaydet(self.randevular)
+                state["hafte"] = hafte_bas(iso)
+                dlg.destroy()
+                _ciz()
+
+            ctk.CTkButton(dlg, text=t("💾 Saxla"), width=140, height=34, corner_radius=10,
+                          fg_color=TH["accent"], hover_color=TH["accent_hover"],
+                          font=ctk.CTkFont(size=12, weight="bold"),
+                          command=_kaydet_form).pack(pady=(16,6))
+            if rid:
+                ctk.CTkButton(dlg, text=t("🗑 Randevunu Sil"), width=160, height=30, corner_radius=8,
+                              fg_color="transparent", border_width=1, border_color="#C0392B",
+                              text_color="#C0392B", hover_color=TH["sidebar_row"],
+                              command=lambda: (dlg.destroy(), _sil(rid))
+                              ).pack()
+
+        _ciz()
 
     def _yeni_hasta(self):
-        d=ctk.CTkInputDialog(text="Hasta adı:",title="Yeni Hasta")
+        d=ctk.CTkInputDialog(text=t("Pasient adı:"),title=t("Yeni Pasient"))
         ad=d.get_input()
         if ad:
             hid = yeni_id("hasta")
@@ -3341,7 +4186,7 @@ class DentalApp(ctk.CTk):
                 "ad": ad,
                 "vakalar": {
                     vid: {
-                        "ad": "1. Vaka",
+                        "ad": f"1. {t('Vaka')}",
                         "tarih": datetime.now().strftime("%d.%m.%Y"),
                         "plan": {}, "tedavi": {}
                     }
@@ -3366,11 +4211,11 @@ class DentalApp(ctk.CTk):
             snap = dict(self.hastalar)
             threading.Thread(target=self._cloud_auto_sync_worker, args=(snap,), daemon=True).start()
             tkinter.messagebox.showinfo(
-                "Kaydedildi",
+                t("Kaydedildi"),
                 f"'{ad}' yedəkləndi və bütün hastalar buludla sinxronlaşdırılır…")
         else:
             tkinter.messagebox.showinfo(
-                "Kaydedildi", f"'{ad}' yedəkləndi:\n{self._BXD_BASE}")
+                t("Kaydedildi"), f"'{ad}' yedəkləndi:\n{self._BXD_BASE}")
 
     def _hasta_yukle(self):
         """Import a .bxd patient file and add them to the current database."""
@@ -3384,11 +4229,11 @@ class DentalApp(ctk.CTk):
             with open(dosya, "r", encoding="utf-8") as f:
                 payload = json.load(f)
         except Exception as exc:
-            tkinter.messagebox.showerror("Yükleme Hatası", f"Dosya okunamadı:\n{exc}")
+            tkinter.messagebox.showerror(t("Yükleme Hatası"), f"Dosya okunamadı:\n{exc}")
             return
         if payload.get("format") != "bxd" or "hasta" not in payload:
-            tkinter.messagebox.showerror("Geçersiz Dosya",
-                                         "Bu geçerli bir .bxd hasta dosyası değil.")
+            tkinter.messagebox.showerror(t("Geçersiz Dosya"),
+                                         t("Bu geçerli bir .bxd hasta dosyası değil."))
             return
         h = payload["hasta"]
         new_hid = yeni_id("hasta")
@@ -3399,7 +4244,7 @@ class DentalApp(ctk.CTk):
         self.expanded_hids.add(new_hid)
         self._lista_guncelle()
         self.after(100, lambda: self._yukle(hid=new_hid))
-        tkinter.messagebox.showinfo("Yüklendi",
+        tkinter.messagebox.showinfo(t("Yüklendi"),
                                     f"'{h.get('ad', '')}' hastası başarıyla yüklendi.")
 
     # ── X-ray folder watcher methods ─────────────────────────────────────────
@@ -3489,14 +4334,14 @@ class DentalApp(ctk.CTk):
         fname = os.path.basename(filepath)
 
         dlg = ctk.CTkToplevel(self)
-        dlg.title("Yeni Röntgen Algılandı")
+        dlg.title(t("Yeni Rentgen Aşkarlandı"))
         dlg.geometry("480x230")
         dlg.resizable(False, False)
         dlg.attributes("-topmost", True)
         dlg.grab_set()
 
         ctk.CTkLabel(dlg,
-                     text="🦷  Yeni Röntgen Algılandı",
+                     text=t("🦷  Yeni Rentgen Aşkarlandı"),
                      font=ctk.CTkFont(size=15, weight="bold"),
                      text_color="#1565C0").pack(pady=(18, 2))
         ctk.CTkLabel(dlg,
@@ -3519,13 +4364,13 @@ class DentalApp(ctk.CTk):
         btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
         btn_row.pack(pady=14)
         ctk.CTkButton(btn_row,
-                      text="✓  Evet, Ekle",
+                      text=t("✓  Evet, Ekle"),
                       width=170, height=36,
                       fg_color="#1565C0", hover_color="#0D47A1",
                       font=ctk.CTkFont(weight="bold"),
                       command=on_yes).pack(side="left", padx=8)
         ctk.CTkButton(btn_row,
-                      text="✗  Hayır, İptal",
+                      text=t("✗  Hayır, İptal"),
                       width=170, height=36,
                       fg_color="#888", hover_color="#555",
                       command=on_no).pack(side="left", padx=8)
@@ -3560,13 +4405,13 @@ class DentalApp(ctk.CTk):
             if hid == self.aktif_hid:
                 self._rontgen_guncelle()
                 try:
-                    self.tab.set("Röntgen")
+                    self.tab.set(t("Rentgen"))
                 except Exception:
                     pass
             # Push raw file path to VR
             self._push_xray_to_vr(filepath, hid)
         except Exception as e:
-            tk.messagebox.showerror("Hata", f"Röntgen eklenemedi:\n{e}")
+            tk.messagebox.showerror(t("Xəta"), f"Rentgen əlavə edilmədi:\n{e}")
 
     def _push_xray_to_vr(self, filepath: str, hid: str):
         """Write XRAY_PUSH_JSON so BP_XRayPanel's timer picks up the new image."""
@@ -3617,7 +4462,7 @@ class DentalApp(ctk.CTk):
 
         if os.path.exists(self._UE5_EXE):
             mb.showinfo(
-                "VR Layout Editörü",
+                t("VR Layout Editörü"),
                 "Paketlenmiş uygulama başlatılıyor...\n\n"
                 "1. Uygulama yüklenince 'VR Düzenle' modu aktif olur.\n"
                 "2. Üç paneli istediğiniz konuma taşıyın.\n"
@@ -3626,7 +4471,7 @@ class DentalApp(ctk.CTk):
             )
         else:
             mb.showwarning(
-                "VR Layout Editörü",
+                t("VR Layout Editörü"),
                 "Paketlenmiş uygulama bulunamadı:\n\n"
                 f"{self._UE5_EXE}\n\n"
                 "Lütfen önce projeyi paketleyin."
@@ -3667,7 +4512,7 @@ class DentalApp(ctk.CTk):
                 c.get("text", "") for c in content if isinstance(c, dict))
 
             mb.showinfo(
-                "Layout Kaydedildi",
+                t("Layout Kaydedildi"),
                 "VR layout başarıyla kaydedildi!\n"
                 "C:\\BlueX\\vr_loadout.json güncellendi.\n\n"
                 f"{text[:300] or '(UE5 yanıtı alındı)'}"
@@ -3675,15 +4520,15 @@ class DentalApp(ctk.CTk):
 
         except urllib.error.URLError:
             mb.showerror(
-                "Bağlantı Hatası",
-                "UE5 VibeUE sunucusuna bağlanılamadı.\n\n"
+                t("Bağlantı Hatası"),
+                t("UE5 VibeUE sunucusuna bağlanılamadı.\n\n"
                 "UE5'in açık ve PIE modunda olduğunu kontrol edin.\n\n"
                 "Manuel olarak UE5 Output Log'unda çalıştırın:\n"
-                "py C:/BlueX/vr_save_layout.py"
+                "py C:/BlueX/vr_save_layout.py")
             )
         except Exception as e:
             mb.showerror(
-                "Hata",
+                t("Hata"),
                 f"Layout kaydedilemedi:\n{e}\n\n"
                 "Manuel olarak UE5 Output Log'unda çalıştırın:\n"
                 "py C:/BlueX/vr_save_layout.py"
@@ -3705,10 +4550,10 @@ class DentalApp(ctk.CTk):
                 elif not sessiz:
                     import tkinter.messagebox as mb
                     if err:
-                        mb.showinfo("Güncelleme Kontrolü",
+                        mb.showinfo(t("Güncelleme Kontrolü"),
                                      f"Güncelleme kontrol edilemedi:\n{err}")
                     else:
-                        mb.showinfo("Güncelleme Kontrolü",
+                        mb.showinfo(t("Güncelleme Kontrolü"),
                                      f"En güncel sürümü kullanıyorsunuz (v{APP_VERSION}).")
             self.after(0, ui)
         threading.Thread(target=work, daemon=True).start()
@@ -3718,12 +4563,12 @@ class DentalApp(ctk.CTk):
         url = info.get("indirme_url", "")
         notlar = info.get("notlar") or ""
         dlg = ctk.CTkToplevel(self)
-        dlg.title("Yeni Sürüm Var")
+        dlg.title(t("Yeni Sürüm Var"))
         dlg.geometry("440x300")
         dlg.resizable(False, False)
         dlg.attributes("-topmost", True)
         dlg.grab_set()
-        ctk.CTkLabel(dlg, text="🚀  Yeni Sürüm Mevcut",
+        ctk.CTkLabel(dlg, text=t("🚀  Yeni Sürüm Mevcut"),
                      font=ctk.CTkFont(size=15, weight="bold"),
                      text_color="#1565C0").pack(pady=(18, 4))
         ctk.CTkLabel(dlg, text=f"Mevcut sürüm: v{APP_VERSION}   →   Yeni sürüm: v{yeni_surum}",
@@ -3747,11 +4592,11 @@ class DentalApp(ctk.CTk):
             sonra_btn.configure(state="disabled")
             self._guncelleme_indir_kur(url, durum, dlg)
 
-        indir_btn = ctk.CTkButton(btn_row, text="⬇  İndir ve Kur", width=170, height=36,
+        indir_btn = ctk.CTkButton(btn_row, text=t("⬇  İndir ve Kur"), width=170, height=36,
                                    fg_color="#1565C0", hover_color="#0D47A1",
                                    font=ctk.CTkFont(weight="bold"), command=_indir)
         indir_btn.pack(side="left", padx=8)
-        sonra_btn = ctk.CTkButton(btn_row, text="Daha Sonra", width=140, height=36,
+        sonra_btn = ctk.CTkButton(btn_row, text=t("Daha Sonra"), width=140, height=36,
                                    fg_color="#888", hover_color="#555", command=_sonra)
         sonra_btn.pack(side="left", padx=8)
 
