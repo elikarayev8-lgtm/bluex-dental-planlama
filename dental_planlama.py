@@ -464,7 +464,7 @@ def sb_refresh(refresh_token):
 # `app_surumler` tablosunda (bulud, herkese açık okunabilir) en son sürüm
 # satırını okur; installer/supabase_surum_schema.sql ile kurulur. Yeni sürüm
 # yayınlanırken bu tabloya tek bir satır eklenir (surum, indirme_url, notlar).
-APP_VERSION = "1.2.2"
+APP_VERSION = "1.2.3"
 
 def _ver_tuple(s):
     parcalar = []
@@ -3947,6 +3947,8 @@ class DentalApp(ctk.CTk):
             gun_frameleri.append(gf)
             gun_bantlari.append(bantlar)
 
+        gun_zaman_cizgisi = [None] * 7   # bugünkü sütunda canlı "indi" xətti (hər gün üçün ən çox 1 dənə)
+
         def _gun_randevulari(gun_iso):
             return [(rid, r) for rid, r in self.randevular.items() if r.get("tarix") == gun_iso]
 
@@ -3998,6 +4000,31 @@ class DentalApp(ctk.CTk):
                 kol_genislik = max(gf.winfo_width() - 4, 60)
                 for rid, r in _gun_randevulari(iso):
                     _render_blok(gf, rid, r, kol_genislik)
+
+                # Canlı "indi" xətti — yalnız bugünkü sütunda, saat oxu ilə tam üst-üstə
+                # düşsün deyə eyni y_px()*olcek düsturu ilə (bloklarla eyni koordinat sistemi).
+                # plain tk.Frame istifadə olunur (CTkFrame yox) — CTk widgetləri place() ilə
+                # verilən y-i avtomatik miqyaslayır, bu da əl ilə *olcek ilə birgə İKİQAT
+                # miqyaslamaya səbəb olurdu (bloklarda tk.Canvas seçilməsinin səbəbi də elə budur).
+                if aktif:
+                    y_fiziki = round(y_px(datetime.now().strftime("%H:%M")) * olcek)
+                    cizgi = gun_zaman_cizgisi[i]
+                    if cizgi is None or not cizgi.winfo_exists():
+                        cizgi = tk.Frame(gf, height=3, bg="#E11D48", highlightthickness=0, bd=0)
+                        gun_zaman_cizgisi[i] = cizgi
+                    cizgi.place(x=0, y=y_fiziki, relwidth=1)
+                    cizgi.lift()   # randevu bloklarının da üstündə görünsün
+                elif gun_zaman_cizgisi[i] is not None:
+                    if gun_zaman_cizgisi[i].winfo_exists():
+                        gun_zaman_cizgisi[i].destroy()
+                    gun_zaman_cizgisi[i] = None
+
+        def _zaman_cizgisi_tik():
+            if not win.winfo_exists():
+                return
+            _ciz()
+            win.after(60000, _zaman_cizgisi_tik)
+        win.after(60000, _zaman_cizgisi_tik)
 
         def _render_blok(gf, rid, r, kol_genislik):
             saat = r.get("saat", "09:00")
