@@ -464,7 +464,7 @@ def sb_refresh(refresh_token):
 # `app_surumler` tablosunda (bulud, herkese açık okunabilir) en son sürüm
 # satırını okur; installer/supabase_surum_schema.sql ile kurulur. Yeni sürüm
 # yayınlanırken bu tabloya tek bir satır eklenir (surum, indirme_url, notlar).
-APP_VERSION = "1.2.1"
+APP_VERSION = "1.2.2"
 
 def _ver_tuple(s):
     parcalar = []
@@ -4667,6 +4667,15 @@ if __name__=="__main__":
     if "--net-test" in sys.argv:   # GECICI DEBUG - bulud baglanti sinamasi, isim bitince silinecek
         print("=== NET TEST BASLADI ===")
         print("SUPABASE_URL:", SUPABASE_URL)
+        try:
+            import certifi
+            print("certifi modulu:", certifi.__file__)
+            print("certifi.where():", certifi.where())
+            print("cacert.pem mevcuddur:", os.path.exists(certifi.where()))
+        except Exception as e:
+            print("certifi YUKLENEMEDI:", type(e).__name__, repr(e))
+        ctx = ssl_baglam()
+        print("ssl_baglam() netice:", "REAL KONTEKST" if ctx is not None else "NONE (defolta düşür)")
         try:
             r = _sb_http("GET", "/rest/v1/hastalar?select=hasta_id&limit=1")
             print("SONUC: UGURLU:", r)
