@@ -464,7 +464,7 @@ def sb_refresh(refresh_token):
 # `app_surumler` tablosunda (bulud, herkese açık okunabilir) en son sürüm
 # satırını okur; installer/supabase_surum_schema.sql ile kurulur. Yeni sürüm
 # yayınlanırken bu tabloya tek bir satır eklenir (surum, indirme_url, notlar).
-APP_VERSION = "1.2.4"
+APP_VERSION = "1.2.5"
 
 def _ver_tuple(s):
     parcalar = []
@@ -3516,8 +3516,14 @@ class DentalApp(ctk.CTk):
                     return "Bu e-poçt artıq qeydiyyatdan keçib — \"Giriş Et\" düyməsini işlədin."
                 if "invalid_credentials" in s or "Invalid login" in s:
                     return "E-poçt və ya şifrə yanlışdır."
-                if "timeout" in s.lower() or "Bağlantı xətası" in s or "URL ERROR" in s:
-                    return "İnternet bağlantısı yoxdur, zəifdir, ya da bulud əlçatan deyil (vaxt bitdi)."
+                if "vaxt bitdi" in s or "timeout" in s.lower():
+                    return "Bulud serverinə bağlantı vaxtı bitdi (server yavaş cavab verir ya da əlçatan deyil)."
+                if "Bağlantı xətası" in s:
+                    # DNS/SSL/proksi/firewall kimi konkret səbəblər ola bilər — "internet yoxdur"
+                    # demək HƏMİŞƏ doğru deyil (istifadəçidə internet ola bilər, amma bu KONKRET
+                    # server əlçatan olmaya bilər), ona görə əsl səbəbi gizlətmədən göstəririk
+                    sebeb = s.split("Bağlantı xətası:", 1)[-1].strip()
+                    return f"Bulud serverinə qoşulmaq mümkün olmadı ({sebeb}). İnternet varsa, bu server/domen bu şəbəkədə firewall/proksi tərəfindən bloklana bilər."
                 return s
 
             if AYARLAR.get("sb_access_token"):
