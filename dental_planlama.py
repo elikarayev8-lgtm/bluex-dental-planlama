@@ -386,10 +386,12 @@ def _sb_timeout_for(data_bytes):
     kəsib 'vaxt bitdi' xətası verirdi (yavaş/orta sürətli yüklə bağlantısında
     böyük payload 15s-i asanlıqla keçir — canlı sınaqla 20MB üçün 84s ölçüldü).
     Payload ölçüsünə görə minimum ~80KB/s yükləmə sürəti fərz edilərək taban
-    (15s) və tavan (300s) arasında miqyaslanır."""
+    (15s) və tavan arasında miqyaslanır. Tavan 300s→900s qaldırıldı (2026-08-07):
+    çox rentgen/foto şəkli olan bəzi real hastalar (30+ MB) 300s-lik köhnə
+    tavanı da keçirdi, "vaxt bitdi" ilə həmin hasta cloud_push_all-da atlanırdı."""
     if not data_bytes:
         return 15
-    return max(15, min(300, data_bytes // (80 * 1024)))
+    return max(15, min(900, data_bytes // (80 * 1024)))
 
 _SSL_BAGLAM_CACHE = {}
 
@@ -464,7 +466,7 @@ def sb_refresh(refresh_token):
 # `app_surumler` tablosunda (bulud, herkese açık okunabilir) en son sürüm
 # satırını okur; installer/supabase_surum_schema.sql ile kurulur. Yeni sürüm
 # yayınlanırken bu tabloya tek bir satır eklenir (surum, indirme_url, notlar).
-APP_VERSION = "1.2.6"
+APP_VERSION = "1.2.7"
 
 def _ver_tuple(s):
     parcalar = []
