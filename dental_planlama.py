@@ -466,7 +466,7 @@ def sb_refresh(refresh_token):
 # `app_surumler` tablosunda (bulud, herkese açık okunabilir) en son sürüm
 # satırını okur; installer/supabase_surum_schema.sql ile kurulur. Yeni sürüm
 # yayınlanırken bu tabloya tek bir satır eklenir (surum, indirme_url, notlar).
-APP_VERSION = "1.2.7"
+APP_VERSION = "1.2.8"
 
 def _ver_tuple(s):
     parcalar = []
@@ -3144,6 +3144,28 @@ class DentalApp(ctk.CTk):
                     return _sb_http(method, path, body, token=AYARLAR["sb_access_token"], extra_headers=extra_headers, timeout=timeout)
             raise
 
+    def _cloud_authed_request_deneli(self, method, path, body=None, extra_headers=None, timeout=None, max_deneme=3):
+        """`_cloud_authed_request`-in üzərinə keçici (transient) server-tərəfli
+        xətalar üçün avtomatik təkrar cəhd qatı — canlı sınaqla təsdiqləndi:
+        çox böyük (30-45+ MB) tək hasta payload-larında Cloudflare/Supabase
+        ARA-SIRA "HTTP 520" (naməlum server xətası) qaytarır, AMMA EYNİ payload
+        DƏRHAL təkrar sınandıqda adətən uğurla keçir (server-tərəfli müvəqqəti
+        yükdür, sabit ölçü limiti DEYİL — 44MB uğurlu, 45MB bir sınaqda
+        uğursuz/başqa sınaqda uğurlu, 46MB uğurlu ölçülüb)."""
+        son_xeta = None
+        for deneme in range(1, max_deneme + 1):
+            try:
+                return self._cloud_authed_request(method, path, body=body, extra_headers=extra_headers, timeout=timeout)
+            except RuntimeError as e:
+                s = str(e)
+                keciciler = ("vaxt bitdi", "timeout", "HTTP 520", "HTTP 502", "HTTP 503", "HTTP 522", "HTTP 524")
+                if deneme < max_deneme and any(k.lower() in s.lower() for k in keciciler):
+                    son_xeta = e
+                    time.sleep(3 * deneme)
+                    continue
+                raise
+        raise son_xeta
+
     def cloud_push_all(self, snapshot=None, ilerleme=None):
         """Yerel bütün hastaları buluda upsert edir (sətir-sətir insert/əks halda
         update) + bekleyen silmeleri işler.
@@ -3171,8 +3193,12 @@ class DentalApp(ctk.CTk):
                 try: ilerleme(i, toplam, h.get("ad", hid))
                 except Exception: pass
             row = {"hasta_id": hid, "owner": uid, "data": h, "updated_at": now}
+            # keçici server xətaları (timeout, HTTP 520/502/503) üçün avtomatik təkrar
+            # cəhd (bax _cloud_authed_request_deneli şərhi — böyük payload-larda bu
+            # xətalar tez-tez MÜVƏQQƏTİDİR, dərhal təkrar sınandıqda keçir)
+            keci_xetalari = ("vaxt bitdi", "timeout", "http 520", "http 502", "http 503", "http 522", "http 524")
             try:
-                self._cloud_authed_request(
+                self._cloud_authed_request_deneli(
                     "POST", "/rest/v1/hastalar", body=[row],
                     extra_headers={"Prefer": "return=minimal"})
                 basarili += 1
@@ -3180,18 +3206,22 @@ class DentalApp(ctk.CTk):
                 s = str(e)
                 if "HTTP 409" in s or "23505" in s:
                     try:
-                        self._cloud_authed_request(
+                        self._cloud_authed_request_deneli(
                             "PATCH", f"/rest/v1/hastalar?hasta_id=eq.{hid}",
                             body={"data": h, "updated_at": now},
                             extra_headers={"Prefer": "return=minimal"})
                         basarili += 1
                     except RuntimeError as e2:
-                        if "vaxt bitdi" in str(e2) or "timeout" in str(e2).lower():
-                            basarisiz.append((h.get("ad", hid), "çox böyük / yavaş bağlantı"))
+                        if any(k in str(e2).lower() for k in keci_xetalari):
+                            # əsl xəta mətnini SAXLAYIRIQ (təxmini "çox böyük/yavaş" izahı
+                            # yerinə) — server-tərəfli statement timeout (Postgres 57014) ilə
+                            # həqiqi client-tərəfli socket timeout eyni "timeout" sözünü
+                            # daşıyır, amma səbəbləri VƏ həlləri tамamilə fərqlidir
+                            basarisiz.append((h.get("ad", hid), str(e2)[:200]))
                         else:
                             raise
-                elif "vaxt bitdi" in s or "timeout" in s.lower():
-                    basarisiz.append((h.get("ad", hid), "çox böyük / yavaş bağlantı"))
+                elif any(k in s.lower() for k in keci_xetalari):
+                    basarisiz.append((h.get("ad", hid), s[:200]))
                 else:
                     raise
         for hid in list(AYARLAR.get("silinen_hastalar", [])):
@@ -3594,9 +3624,9 @@ class DentalApp(ctk.CTk):
                             def ok():
                                 _set_busy2(False)
                                 if basarisiz:
-                                    adlar = ", ".join(ad for ad, _ in basarisiz)
-                                    _set_status(f"⚠ {n} hasta göndərildi, {len(basarisiz)} göndərilmədi "
-                                                f"(çox böyük/yavaş bağlantı): {adlar}", "#C0392B")
+                                    detal = "\n".join(f"{ad}: {sebeb}" for ad, sebeb in basarisiz)
+                                    _set_status(f"⚠ {n} hasta göndərildi, {len(basarisiz)} göndərilmədi:\n{detal}",
+                                                "#C0392B")
                                 else:
                                     _set_status(f"✓ {n} hasta göndərildi", TH["ok"])
                                 self._cloud_status_guncelle()
