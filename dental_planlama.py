@@ -464,7 +464,7 @@ def sb_refresh(refresh_token):
 # `app_surumler` tablosunda (bulud, herkese açık okunabilir) en son sürüm
 # satırını okur; installer/supabase_surum_schema.sql ile kurulur. Yeni sürüm
 # yayınlanırken bu tabloya tek bir satır eklenir (surum, indirme_url, notlar).
-APP_VERSION = "1.2.5"
+APP_VERSION = "1.2.6"
 
 def _ver_tuple(s):
     parcalar = []
@@ -3142,30 +3142,54 @@ class DentalApp(ctk.CTk):
                     return _sb_http(method, path, body, token=AYARLAR["sb_access_token"], extra_headers=extra_headers, timeout=timeout)
             raise
 
-    def cloud_push_all(self, snapshot=None):
+    def cloud_push_all(self, snapshot=None, ilerleme=None):
         """Yerel bütün hastaları buluda upsert edir (sətir-sətir insert/əks halda
         update) + bekleyen silmeleri işler.
         NOT: bulk 'Prefer: resolution=merge-duplicates' (ON CONFLICT DO UPDATE)
         Postgres RLS-də TƏZƏ sətirlər üçün belə UPDATE policy-nin USING şərtini
         yoxlayır və 403 verir (canlı sınaqla təsdiqləndi) — ona görə hər hasta
-        üçün əvvəl sadə INSERT, 409 (unique_violation) gələrsə PATCH edilir."""
+        üçün əvvəl sadə INSERT, 409 (unique_violation) gələrsə PATCH edilir.
+        `ilerleme(i, toplam, hasta_adı)` hər hasta göndərilməzdən əvvəl çağırılır
+        (UI-də "Göndərilir… 4/12 (Əli)" kimi göstərmək üçün).
+        Bir hastanın öz vaxt-bitmə xətası (çox böyük rentgen/foto + yavaş bağlantı)
+        ARTIQ bütün sinxronu DAYANDIRMIR — həmin hasta ATLANIR, digərləri davam edir
+        (əvvəllər tək bir böyük/yavaş hasta bütün push-u bloklayırdı, xəstə sayı
+        artdıqca bu ehtimal da artırdı — istifadəçi bildirdi: "az xəstədə problem
+        olmurdu, xəstə sayı çoxaldıqda oldu")."""
         uid = AYARLAR.get("sb_user_id")
         if not uid:
             raise RuntimeError("Bulud girişi edilməyib")
         data = snapshot if snapshot is not None else self.hastalar
         now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-        for hid, h in data.items():
+        toplam = len(data)
+        basarili = 0
+        basarisiz = []   # [(hasta_adı, səbəb)]
+        for i, (hid, h) in enumerate(data.items(), start=1):
+            if ilerleme:
+                try: ilerleme(i, toplam, h.get("ad", hid))
+                except Exception: pass
             row = {"hasta_id": hid, "owner": uid, "data": h, "updated_at": now}
             try:
                 self._cloud_authed_request(
                     "POST", "/rest/v1/hastalar", body=[row],
                     extra_headers={"Prefer": "return=minimal"})
+                basarili += 1
             except RuntimeError as e:
-                if "HTTP 409" in str(e) or "23505" in str(e):
-                    self._cloud_authed_request(
-                        "PATCH", f"/rest/v1/hastalar?hasta_id=eq.{hid}",
-                        body={"data": h, "updated_at": now},
-                        extra_headers={"Prefer": "return=minimal"})
+                s = str(e)
+                if "HTTP 409" in s or "23505" in s:
+                    try:
+                        self._cloud_authed_request(
+                            "PATCH", f"/rest/v1/hastalar?hasta_id=eq.{hid}",
+                            body={"data": h, "updated_at": now},
+                            extra_headers={"Prefer": "return=minimal"})
+                        basarili += 1
+                    except RuntimeError as e2:
+                        if "vaxt bitdi" in str(e2) or "timeout" in str(e2).lower():
+                            basarisiz.append((h.get("ad", hid), "çox böyük / yavaş bağlantı"))
+                        else:
+                            raise
+                elif "vaxt bitdi" in s or "timeout" in s.lower():
+                    basarisiz.append((h.get("ad", hid), "çox böyük / yavaş bağlantı"))
                 else:
                     raise
         for hid in list(AYARLAR.get("silinen_hastalar", [])):
@@ -3175,7 +3199,7 @@ class DentalApp(ctk.CTk):
                 print(f"[Bulud] silme göndərilmədi ({hid}): {e}")
         AYARLAR["silinen_hastalar"] = []
         ayar_kaydet(AYARLAR)
-        return len(data)
+        return basarili, basarisiz
 
     def _cloud_fetch_batch(self, hids, timeout=180):
         """Verilmiş hasta_id'ler üçün data'nı çəkir. Supabase-in pulsuz planında
@@ -3557,15 +3581,22 @@ class DentalApp(ctk.CTk):
                     if busy2["on"]: return
                     _set_busy2(True)
                     _set_status("Göndərilir…")
+                    def prog(i, toplam, ad):
+                        win.after(0, lambda: _set_status(f"Göndərilir… {i}/{toplam} ({ad})"))
                     def work():
                         try:
                             with _CLOUD_SYNC_LOCK:   # avtomatik sinxronla üst-üstə düşməsin
-                                n = self.cloud_push_all()
+                                n, basarisiz = self.cloud_push_all(ilerleme=prog)
                             AYARLAR["sb_son_senkron"] = datetime.now().strftime("%H:%M")
                             ayar_kaydet(AYARLAR)
                             def ok():
                                 _set_busy2(False)
-                                _set_status(f"✓ {n} hasta göndərildi", TH["ok"])
+                                if basarisiz:
+                                    adlar = ", ".join(ad for ad, _ in basarisiz)
+                                    _set_status(f"⚠ {n} hasta göndərildi, {len(basarisiz)} göndərilmədi "
+                                                f"(çox böyük/yavaş bağlantı): {adlar}", "#C0392B")
+                                else:
+                                    _set_status(f"✓ {n} hasta göndərildi", TH["ok"])
                                 self._cloud_status_guncelle()
                             win.after(0, ok)
                         except Exception as e:
