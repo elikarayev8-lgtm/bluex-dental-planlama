@@ -3,7 +3,7 @@ import customtkinter as ctk
 import tkinter as tk
 from PIL import Image, ImageDraw, ImageTk, ImageFilter, ImageFont, ImageChops
 from io import BytesIO
-import json, os, math, base64, numpy as np, threading, queue, time, uuid, copy, shutil
+import json, os, math, base64, numpy as np, threading, queue, time, uuid, copy, shutil, hashlib
 from datetime import datetime, date, timedelta
 
 # ── X-ray folder watcher (watchdog) ─────────────────────────────────────────
@@ -466,7 +466,7 @@ def sb_refresh(refresh_token):
 # `app_surumler` tablosunda (bulud, herkese açık okunabilir) en son sürüm
 # satırını okur; installer/supabase_surum_schema.sql ile kurulur. Yeni sürüm
 # yayınlanırken bu tabloya tek bir satır eklenir (surum, indirme_url, notlar).
-APP_VERSION = "1.2.8"
+APP_VERSION = "1.2.9"
 
 def _ver_tuple(s):
     parcalar = []
@@ -557,6 +557,14 @@ _CLOUD_SYNC_LOCK = threading.Lock()  # manuel push/pull ile 20sn'lik otomatik ti
                                       # aynı anda çalışıp token yenileme yarışına girmesini engeller
 _BACKUP_DIRTY = False   # yerelde değişiklik oldu, .bxd yedeyi bekliyor
 _BACKUP_LAST_CHANGE = 0.0
+
+_CLOUD_SENT_HASH = {}   # hasta_id -> son uğurla buluda göndərilmiş/buluddan alınmış
+                         # məzmunun hash-i — avtomatik sinxron BUNA görə YALNIZ
+                         # HƏQİQƏTƏN dəyişmiş hastaları göndərir (hər 23 hastanı
+                         # yenidən göndərmək əvəzinə tez-tez amma kiçik-kiçik sinxron)
+
+def _hasta_hash(h):
+    return hashlib.sha1(json.dumps(h, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 def veri_kaydet(data):
     global _CLOUD_DIRTY, _BACKUP_DIRTY, _BACKUP_LAST_CHANGE
@@ -3166,7 +3174,7 @@ class DentalApp(ctk.CTk):
                 raise
         raise son_xeta
 
-    def cloud_push_all(self, snapshot=None, ilerleme=None):
+    def cloud_push_all(self, snapshot=None, ilerleme=None, yalniz_deyisenler=False):
         """Yerel bütün hastaları buluda upsert edir (sətir-sətir insert/əks halda
         update) + bekleyen silmeleri işler.
         NOT: bulk 'Prefer: resolution=merge-duplicates' (ON CONFLICT DO UPDATE)
@@ -3184,6 +3192,11 @@ class DentalApp(ctk.CTk):
         if not uid:
             raise RuntimeError("Bulud girişi edilməyib")
         data = snapshot if snapshot is not None else self.hastalar
+        if yalniz_deyisenler:
+            # yalnız son uğurlu sinxrondan bəri HƏQİQƏTƏN dəyişmiş hastaları göndər —
+            # avtomatik arxa-plan tick-i hər dəfə BÜTÜN hastaları YENİDƏN göndərmək
+            # əvəzinə tez-tez amma kiçik-kiçik sinxronlaşsın deyə
+            data = {hid: h for hid, h in data.items() if _hasta_hash(h) != _CLOUD_SENT_HASH.get(hid)}
         now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
         toplam = len(data)
         basarili = 0
@@ -3202,6 +3215,7 @@ class DentalApp(ctk.CTk):
                     "POST", "/rest/v1/hastalar", body=[row],
                     extra_headers={"Prefer": "return=minimal"})
                 basarili += 1
+                _CLOUD_SENT_HASH[hid] = _hasta_hash(h)
             except RuntimeError as e:
                 s = str(e)
                 if "HTTP 409" in s or "23505" in s:
@@ -3211,6 +3225,7 @@ class DentalApp(ctk.CTk):
                             body={"data": h, "updated_at": now},
                             extra_headers={"Prefer": "return=minimal"})
                         basarili += 1
+                        _CLOUD_SENT_HASH[hid] = _hasta_hash(h)
                     except RuntimeError as e2:
                         if any(k in str(e2).lower() for k in keci_xetalari):
                             # əsl xəta mətnini SAXLAYIRIQ (təxmini "çox böyük/yavaş" izahı
@@ -3263,6 +3278,9 @@ class DentalApp(ctk.CTk):
         for i in range(0, len(ids), BATCH):
             for row in self._cloud_fetch_batch(ids[i:i + BATCH]):
                 self.hastalar[row["hasta_id"]] = row["data"]
+                # buludan indi endirilən məzmun artıq "sinxron" sayılır — avtomatik
+                # tick bunu dərhal geri buluda göndərməyə çalışmasın
+                _CLOUD_SENT_HASH[row["hasta_id"]] = _hasta_hash(row["data"])
                 toplam += 1
         veri_kaydet(self.hastalar)
         return toplam
@@ -3282,6 +3300,7 @@ class DentalApp(ctk.CTk):
             raise RuntimeError("Hasta buludda tapılmadı")
         row = rows[0]
         self.hastalar[row["hasta_id"]] = row["data"]
+        _CLOUD_SENT_HASH[row["hasta_id"]] = _hasta_hash(row["data"])
         veri_kaydet(self.hastalar)
         return row["data"].get("ad", "")
 
@@ -3298,21 +3317,25 @@ class DentalApp(ctk.CTk):
     def _cloud_auto_sync_tick(self):
         global _CLOUD_DIRTY
         if cloud_configured() and AYARLAR.get("sb_access_token") and _CLOUD_DIRTY:
-            # Böyük hastalar (rentgen/foto) tək bir push'un 20sn-dən çox sürməsinə
-            # səbəb ola bilir — əl ilə push davam edərkən bura girərsə qıfıl tutula
+            # Böyük hastalar (rentgen/foto) tək bir push'un uzun sürməsinə səbəb
+            # ola bilir — əl ilə push davam edərkən bura girərsə qıfıl tutula
             # bilmir, o zaman _CLOUD_DIRTY-ni False etmirik ki, növbəti tick yenidən
             # sınasın (əks halda bu dəyişiklik heç vaxt buluda getməzdi).
             if _CLOUD_SYNC_LOCK.acquire(blocking=False):
                 _CLOUD_DIRTY = False
                 snap = dict(self.hastalar)   # ana thread'də sığ kopya — arxa plan thread'i üçün
-                threading.Thread(target=self._cloud_auto_sync_worker, args=(snap,), daemon=True).start()
+                threading.Thread(target=self._cloud_auto_sync_worker,
+                                  args=(snap,), kwargs={"yalniz_deyisenler": True}, daemon=True).start()
             else:
                 print("[Bulud] avtomatik sinxron keçildi — başqa sinxron davam edir")
-        self.after(20000, self._cloud_auto_sync_tick)   # 20 saniyədə bir yoxla
+        # tez-tez yoxla (8s) — YALNIZ dəyişən hastalar göndərilir (yalniz_deyisenler),
+        # ona görə tez-tez olması şəbəkəyə əlavə yük gətirmir (dəyişiklik yoxdursa
+        # heç bir sorğu getmir, hash müqayisəsi tamamilə yerel/pulsuzdur)
+        self.after(8000, self._cloud_auto_sync_tick)
 
-    def _cloud_auto_sync_worker(self, snapshot):
+    def _cloud_auto_sync_worker(self, snapshot, yalniz_deyisenler=False):
         try:
-            self.cloud_push_all(snapshot)
+            self.cloud_push_all(snapshot, yalniz_deyisenler=yalniz_deyisenler)
             AYARLAR["sb_son_senkron"] = datetime.now().strftime("%H:%M")
             ayar_kaydet(AYARLAR)
             self.after(0, self._cloud_status_guncelle, None)
@@ -3690,6 +3713,7 @@ class DentalApp(ctk.CTk):
                 def _logout():
                     for k in ("sb_access_token", "sb_refresh_token", "sb_user_id"):
                         AYARLAR.pop(k, None)
+                    _CLOUD_SENT_HASH.clear()   # başqa hesaba keçilə bilər, köhnə hash-lər yanlış olar
                     ayar_kaydet(AYARLAR)
                     self._cloud_status_guncelle()
                     _cloud_section_build()
