@@ -3,7 +3,7 @@ import customtkinter as ctk
 import tkinter as tk
 from PIL import Image, ImageDraw, ImageTk, ImageFilter, ImageFont, ImageChops
 from io import BytesIO
-import json, os, math, base64, numpy as np, threading, queue, time, uuid, copy
+import json, os, math, base64, numpy as np, threading, queue, time, uuid, copy, shutil
 from datetime import datetime, date, timedelta
 
 # ── X-ray folder watcher (watchdog) ─────────────────────────────────────────
@@ -464,7 +464,7 @@ def sb_refresh(refresh_token):
 # `app_surumler` tablosunda (bulud, herkese açık okunabilir) en son sürüm
 # satırını okur; installer/supabase_surum_schema.sql ile kurulur. Yeni sürüm
 # yayınlanırken bu tabloya tek bir satır eklenir (surum, indirme_url, notlar).
-APP_VERSION = "1.2.3"
+APP_VERSION = "1.2.4"
 
 def _ver_tuple(s):
     parcalar = []
@@ -499,8 +499,15 @@ def yeni_id(prefix):
 
 def veri_yukle():
     if os.path.exists(DATA_FILE):
-        with open(DATA_FILE,"r",encoding="utf-8") as f:
-            data = json.load(f)
+        try:
+            with open(DATA_FILE,"r",encoding="utf-8") as f:
+                # strict=False: bəzi hasta qeydlərində (Not Dəftəri, qeyd sahələri və s.)
+                # ham sətir-sonu/tab kimi nəzarət simvolları ola bilər — JSON spesifikasiyası
+                # bunları qadağan edir, amma strict=False bu sahələri normal mətn kimi qəbul edir.
+                data = json.load(f, strict=False)
+        except json.JSONDecodeError as e:
+            _veri_faylini_zedelenmis_bildir(e)
+            return {}
         # Eski format → vakalar'a geçiş
         changed = False
         for hid, h in data.items():
@@ -515,10 +522,33 @@ def veri_yukle():
                 }}
                 changed = True
         if changed:
-            with open(DATA_FILE,"w",encoding="utf-8") as f:
-                json.dump(data,f,ensure_ascii=False,indent=2)
+            veri_kaydet(data)
         return data
     return {}
+
+def _veri_faylini_zedelenmis_bildir(hata):
+    """DATA_FILE JSON kimi oxuna bilməyəndə: zədələnmiş faylı yan qovluğa köçürüb
+    saxlayır (itməsin) və istifadəçiyə ham traceback əvəzinə anlaşılan mesaj göstərir."""
+    korrupt_yol = None
+    try:
+        korrupt_yol = DATA_FILE + f".korrupt_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        shutil.copyfile(DATA_FILE, korrupt_yol)
+    except Exception:
+        korrupt_yol = None
+    yedek_qovlugu = os.path.join(os.path.dirname(DATA_FILE), "HastaYedekleri")
+    mesaj = (
+        "Verilər faylı (hastalar.json) zədələnib, oxuna bilmir:\n"
+        f"{hata}\n\n"
+        "Proqram BOŞ pasient siyahısı ilə açılacaq ki, işə davam edə biləsiniz.\n"
+        + (f"Zədələnmiş fayl qorunub saxlanıldı:\n{korrupt_yol}\n\n" if korrupt_yol else "\n")
+        + f"Hər pasientin ayrı ehtiyat nüsxəsi (.bxd) bu qovluqda ola bilər:\n{yedek_qovlugu}\n"
+        "Oradan \"Pasient Yükle\" ilə pasientləri bir-bir geri yükləyə bilərsiniz."
+    )
+    try:
+        from tkinter import messagebox
+        messagebox.showerror("Verilər Faylı Zədələnib", mesaj)
+    except Exception:
+        print(mesaj)
 
 _CLOUD_DIRTY = False    # yerelde değişiklik oldu, buluta gönderilmeyi bekliyor
 _CLOUD_SYNC_LOCK = threading.Lock()  # manuel push/pull ile 20sn'lik otomatik tick'in
@@ -529,8 +559,13 @@ _BACKUP_LAST_CHANGE = 0.0
 def veri_kaydet(data):
     global _CLOUD_DIRTY, _BACKUP_DIRTY, _BACKUP_LAST_CHANGE
     os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
-    with open(DATA_FILE,"w",encoding="utf-8") as f:
+    # atomik yazma: əvvəlcə .tmp faylına yaz, sonra os.replace() ilə əsl faylın üzərinə
+    # köçür — yazma yarıda kəsilsə (cərəyan, çökmə, sinxron zamanı bağlama) hastalar.json
+    # ya tam yeni halı ilə qalır, ya da heç toxunulmamış qalır, YARIMÇIQ/korrupt olmur.
+    tmp_yol = DATA_FILE + ".tmp"
+    with open(tmp_yol,"w",encoding="utf-8") as f:
         json.dump(data,f,ensure_ascii=False,indent=2)
+    os.replace(tmp_yol, DATA_FILE)
     _CLOUD_DIRTY = True
     _BACKUP_DIRTY = True
     _BACKUP_LAST_CHANGE = time.time()
