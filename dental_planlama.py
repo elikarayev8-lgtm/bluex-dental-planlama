@@ -55,7 +55,60 @@ else:
     DATA_FILE = os.path.join(SCRIPT_DIR, 'hastalar.json')
 XRAY_WATCH_DIR = r"E:\DRImage"   # varsayılan — Ayarlar'dan değiştirilebilir
 XRAY_PUSH_JSON = r"C:\BlueX\xray_push.json"
+XRAY_VR_CURRENT_JPG = r"C:\BlueX\xray_vr_current.jpg"  # decoded from rontgenler[i]["data"] — always exists on disk, unlike the original scanned file
 VR_LOADOUT_FILE = r"C:\BlueX\vr_loadout.json"
+XRAY_HTTP_PORT = 8091  # Quest XRay Viewer app fetches GET /xray/latest.jpg + /xray/meta.json from here
+
+# In-memory cache the embedded HTTP server serves from — updated directly by
+# _push_vr_xray_by_index, so the Quest app sees a new röntgen the moment it's
+# selected (no separate xray_server.py / file-polling process needed anymore).
+_XRAY_HTTP_LOCK = threading.Lock()
+_XRAY_HTTP_JPEG = None
+_XRAY_HTTP_META = {"patient_name": "", "timestamp": ""}
+
+
+def _start_xray_http_server():
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class _Handler(BaseHTTPRequestHandler):
+        def log_message(self, fmt, *args):
+            pass
+
+        def do_GET(self):
+            if self.path == "/xray/latest.jpg":
+                with _XRAY_HTTP_LOCK:
+                    jpeg = _XRAY_HTTP_JPEG
+                if jpeg is None:
+                    self.send_response(503)
+                    self.end_headers()
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Content-Length", str(len(jpeg)))
+                self.send_header("Cache-Control", "no-cache, private")
+                self.end_headers()
+                self.wfile.write(jpeg)
+            elif self.path == "/xray/meta.json":
+                with _XRAY_HTTP_LOCK:
+                    meta = dict(_XRAY_HTTP_META)
+                body = json.dumps(meta, ensure_ascii=False).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+    def _serve():
+        try:
+            ThreadingHTTPServer(("0.0.0.0", XRAY_HTTP_PORT), _Handler).serve_forever()
+        except Exception as e:
+            print(f"[XRayHTTP] server error: {e}")
+
+    threading.Thread(target=_serve, daemon=True).start()
+    print(f"[XRayHTTP] :{XRAY_HTTP_PORT} — /xray/latest.jpg, /xray/meta.json")
 
 # uygulama simgesi (exe'de PyInstaller datas ile gelir, dev'de script dizininde)
 ICON_FILE = os.path.join(getattr(sys, "_MEIPASS", SCRIPT_DIR), "app.ico")
@@ -137,6 +190,7 @@ TRANSLATIONS = {
     "Bu randevunu silmək istədiyinizə əminsiniz?": {"en": "Are you sure you want to delete this appointment?", "ru": "Вы уверены, что хотите удалить эту запись?", "tr": "Bu randevuyu silmek istediğinize emin misiniz?"},
     "Bu röntgeni silmek istədiyinizə əminsiniz?": {"en": "Are you sure you want to delete this X-ray?", "ru": "Вы уверены, что хотите удалить этот снимок?", "tr": "Bu röntgeni silmek istediğinize emin misiniz?"},
     "Bu xəstə gəldi kimi qeyd edilsin?": {"en": "Mark this patient as arrived?", "ru": "Отметить пациента как прибывшего?", "tr": "Bu hasta geldi olarak işaretlensin mi?"},
+    "Bu dişdəki qeyd olunmuş müalicəni geri almaq/dəyişmək istədiyinizə əminsiniz?": {"en": "Are you sure you want to undo/change the recorded treatment on this tooth?", "ru": "Вы уверены, что хотите отменить/изменить записанное лечение этого зуба?", "tr": "Bu dişteki kayıtlı tedaviyi geri almak/değiştirmek istediğinize emin misiniz?"},
     "Bulud": {"en": "Cloud", "ru": "Облако", "tr": "Bulut"},
     "Bulud sunucusu hələ qurulmayıb — proqram yalnız yerel işləyir.": {"en": "Cloud server not set up yet — the app only works locally.", "ru": "Облачный сервер ещё не настроен — программа работает только локально.", "tr": "Bulut sunucusu henüz kurulmamış — program yalnızca yerel çalışıyor."},
     "Buludda hasta tapılmadı.": {"en": "No patient found in the cloud.", "ru": "Пациент не найден в облаке.", "tr": "Bulutta hasta bulunamadı."},
@@ -195,6 +249,7 @@ TRANSLATIONS = {
     "SEÇİLİ DİŞ": {"en": "SELECTED TOOTH", "ru": "ВЫБРАННЫЙ ЗУБ", "tr": "SEÇİLİ DİŞ"},
     "STATUS": {"en": "STATUS", "ru": "СТАТУС", "tr": "DURUM"},
     "STATUS RƏNGLƏRİ": {"en": "STATUS COLORS", "ru": "ЦВЕТА СТАТУСОВ", "tr": "DURUM RENKLERİ"},
+    "Geri Al": {"en": "Undo", "ru": "Отменить", "tr": "Geri Al"},
     "Sil": {"en": "Delete", "ru": "Удалить", "tr": "Sil"},
     "Sonra": {"en": "Later", "ru": "Позже", "tr": "Sonra"},
     "TARİX (gg.aa.yyyy)": {"en": "DATE (dd.mm.yyyy)", "ru": "ДАТА (дд.мм.гггг)", "tr": "TARİH (gg.aa.yyyy)"},
@@ -466,7 +521,7 @@ def sb_refresh(refresh_token):
 # `app_surumler` tablosunda (bulud, herkese açık okunabilir) en son sürüm
 # satırını okur; installer/supabase_surum_schema.sql ile kurulur. Yeni sürüm
 # yayınlanırken bu tabloya tek bir satır eklenir (surum, indirme_url, notlar).
-APP_VERSION = "1.2.9"
+APP_VERSION = "1.2.10"
 
 def _ver_tuple(s):
     parcalar = []
@@ -1771,7 +1826,9 @@ class DentalApp(ctk.CTk):
         self._pending_xray_dialog = False
         self._xray_confirmed_session = None  # (hid, vid) last confirmed; None = ask again
         self._last_dis_per_vaka: dict = {}   # {(hid,vid): (n0, n1)} last selected tooth per arch
+        self._vr_xray_idx: dict = {}         # {hid: index into rontgenler} currently shown on VR
         self._start_xray_watcher()
+        _start_xray_http_server()
         self.after(2000, self._check_xray_queue)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -2152,6 +2209,19 @@ class DentalApp(ctk.CTk):
                      font=ctk.CTkFont(size=11),text_color=TH["txt_sub"]).pack(
                      side="left",padx=6)
 
+        # VR röntgen naviqasiyası — Quest-də göstərilən şəkli irəli/geri dəyişir
+        ctk.CTkButton(bar,text="▶",width=34,height=34,corner_radius=8,
+                       fg_color=TH["accent"],hover_color=TH["accent_hover"],
+                       font=ctk.CTkFont(size=13,weight="bold"),
+                       command=lambda:self._xray_vr_nav(+1)).pack(side="right",padx=(4,10),pady=10)
+        self.xray_vr_nav_lbl=ctk.CTkLabel(bar,text="",width=70,
+                     font=ctk.CTkFont(size=11,weight="bold"),text_color=TH["txt_sub"])
+        self.xray_vr_nav_lbl.pack(side="right",padx=4)
+        ctk.CTkButton(bar,text="◀",width=34,height=34,corner_radius=8,
+                       fg_color=TH["accent"],hover_color=TH["accent_hover"],
+                       font=ctk.CTkFont(size=13,weight="bold"),
+                       command=lambda:self._xray_vr_nav(-1)).pack(side="right",padx=4,pady=10)
+
         self.rontgen_scroll=ctk.CTkScrollableFrame(self.p3,fg_color="transparent")
         self.rontgen_scroll.grid(row=1,column=0,sticky="nsew",padx=8,pady=4)
 
@@ -2174,6 +2244,9 @@ class DentalApp(ctk.CTk):
         })
         veri_kaydet(self.hastalar)
         self._auto_bxd_backup(self.aktif_hid)
+        new_idx = len(h["rontgenler"]) - 1
+        self._vr_xray_idx[self.aktif_hid] = new_idx
+        self._push_vr_xray_by_index(self.aktif_hid, new_idx)
         self._rontgen_guncelle()
 
     def _rontgen_guncelle(self):
@@ -2237,7 +2310,7 @@ class DentalApp(ctk.CTk):
                                    borderwidth=0, highlightthickness=0)
                     lbl.image = photo
                     lbl.pack(padx=6, pady=2)
-                    lbl.bind("<Button-1>", lambda e, rd=r: self._rontgen_tam_goster(rd))
+                    lbl.bind("<Button-1>", lambda e, rd=r, ri=i: self._rontgen_secip_goster(rd, ri))
                 except Exception as exc:
                     ctk.CTkLabel(kart, text=f"Yüklenemedi:\n{exc}",
                                  text_color="red",
@@ -2249,6 +2322,14 @@ class DentalApp(ctk.CTk):
                                font=ctk.CTkFont(size=10),
                                command=lambda ix=i: self._rontgen_sil(ix)).pack(
                                anchor="e", padx=5, pady=(1, 5))
+
+    def _rontgen_secip_goster(self, r, idx):
+        """Thumbnail klik: tam ekran popup + bu röntgeni Quest VR-də göstər."""
+        if self.aktif_hid:
+            self._vr_xray_idx[self.aktif_hid] = idx
+            self._push_vr_xray_by_index(self.aktif_hid, idx)
+            self._xray_vr_nav_label_guncelle()
+        self._rontgen_tam_goster(r)
 
     def _rontgen_tam_goster(self, r):
         """Rentgeni tam ekran popup'ta göstər"""
@@ -2317,6 +2398,11 @@ class DentalApp(ctk.CTk):
             r.pop(idx)
             veri_kaydet(self.hastalar)
             self._rontgen_guncelle()
+            n = len(r)
+            new_idx = min(self._vr_xray_idx.get(self.aktif_hid, n - 1), n - 1) if n else None
+            self._vr_xray_idx[self.aktif_hid] = new_idx
+            self._push_vr_xray_by_index(self.aktif_hid, new_idx)
+            self._xray_vr_nav_label_guncelle()
 
     # ── FOTO (intraoral / üz) ─────────────────────────────────────────────────
 
@@ -2669,18 +2755,47 @@ class DentalApp(ctk.CTk):
             return t("Çürük") + " (" + "".join(mevcut["curuk"]) + ")"
         return None
 
+    def _tedavi_kateqoriya(self, tid):
+        """tarixçədə eyni gün+diş+kateqoriya qeydlərini birləştirmək üçün qrup açarı."""
+        if tid in ("curuk", "dolgu", "kron", "kanal"):
+            return tid
+        return "tac"
+
+    def _tedavi_geri_al_mi(self, eski, tid, zone):
+        """Bu klik, artıq qeyd olunmuş bir müalicəni GERİ ALACAQ (söndürəcək) mi?"""
+        if tid == "saglikli":
+            return bool(eski.get("kanal") or eski.get("kron")
+                        or eski.get("curuk") or eski.get("dolgu") or eski.get("tac"))
+        if tid == "kron":
+            return bool(eski.get("kron"))
+        if tid == "kanal":
+            return bool(eski.get("kanal"))
+        if tid in ("curuk", "dolgu"):
+            z = zone or "O"
+            return z in (eski.get(tid) or [])
+        # çəkim/qapaq növləri/implant/diş daşı və s. — hər hansı "tac" tipi
+        # tədavi: eyni düyməyə yenidən basmaq onu geri alır (söndürür)
+        return eski.get("tac") == tid
+
     def _uygula_tedavi(self,n,zone=None):
         if not self.aktif_hid or not self.aktif_vid: return
         h = self.hastalar[self.aktif_hid]
         vaka = h["vakalar"][self.aktif_vid]
         tedavi = vaka.setdefault("tedavi", {})
         eski = normalize_state(tedavi.get(str(n), {}))
-        mevcut = normalize_state(tedavi.get(str(n), {}))
         tid = self.secili_tedavi
+        if self._tedavi_geri_al_mi(eski, tid, zone):
+            from tkinter import messagebox
+            if not messagebox.askyesno(
+                    t("Geri Al"),
+                    t("Bu dişdəki qeyd olunmuş müalicəni geri almaq/dəyişmək "
+                      "istədiyinizə əminsiniz?")):
+                return
+        mevcut = normalize_state(tedavi.get(str(n), {}))
         if tid == "saglikli":
             mevcut = {"kanal": False, "kron": False, "curuk": [], "dolgu": [], "tac": None}
         elif tid == "kanal":
-            mevcut["kanal"] = True
+            mevcut["kanal"] = not mevcut.get("kanal", False)
         elif tid == "kron":
             mevcut["kron"] = not mevcut.get("kron", False)
         elif tid == "curuk":
@@ -2688,12 +2803,31 @@ class DentalApp(ctk.CTk):
         elif tid == "dolgu":
             self._yuz_toggle(mevcut, "dolgu", zone)
         else:
-            mevcut["tac"] = tid
+            # eyni düyməyə yenidən basmaq (çəkim/qapaq növü/implant/diş daşı
+            # və s.) artıq qeyd olunmuş tədavini geri alır (None-a söndürür)
+            mevcut["tac"] = None if mevcut.get("tac") == tid else tid
         tedavi[str(n)] = mevcut
         aksiyon = self._tedavi_aksiyon_metni(eski, mevcut)
-        if aksiyon:
-            vaka.setdefault("tedavi_tarixce", []).append(
-                {"dis": n, "tarix": datetime.now().strftime("%d.%m.%Y"), "aksiyon": aksiyon})
+        bugun = datetime.now().strftime("%d.%m.%Y")
+        kateqoriya = self._tedavi_kateqoriya(tid)
+        tarixce = vaka.setdefault("tedavi_tarixce", [])
+        # eyni gündə, eyni dişdə, eyni kateqoriyada əvvəlki qeyd varsa onu
+        # YENİLƏ (ayrı-ayrı qeydlər yaranmasın); əməliyyat nəticəsi "boş"dursa
+        # (geri alınıbsa) qeydi tamamilə sil.
+        for i in range(len(tarixce) - 1, -1, -1):
+            kayit = tarixce[i]
+            if kayit.get("dis") == n and kayit.get("tarix") == bugun \
+                    and kayit.get("kateqoriya") == kateqoriya:
+                if aksiyon:
+                    tarixce[i] = {"dis": n, "tarix": bugun, "aksiyon": aksiyon,
+                                   "kateqoriya": kateqoriya}
+                else:
+                    tarixce.pop(i)
+                break
+        else:
+            if aksiyon:
+                tarixce.append({"dis": n, "tarix": bugun, "aksiyon": aksiyon,
+                                 "kateqoriya": kateqoriya})
         veri_kaydet(self.hastalar)
         self.arch1.set_tedavi(n, mevcut)
         metin = dis_durum_str(mevcut)
@@ -2825,6 +2959,11 @@ class DentalApp(ctk.CTk):
         self._notlar_guncelle()
         self._rontgen_guncelle()
         self._foto_guncelle()
+        # Show this patient's latest röntgen on the Quest VR app
+        n_rontgen = len(h.get("rontgenler", []))
+        self._vr_xray_idx[hid] = (n_rontgen - 1) if n_rontgen else None
+        self._push_vr_xray_by_index(hid, self._vr_xray_idx[hid])
+        self._xray_vr_nav_label_guncelle()
         # Restore last selected tooth; fall back to first treated tooth if none remembered
         n0, n1 = self._last_dis_per_vaka.get((hid, vid), (None, None))
         if n0 is None and plan_data:
@@ -3006,14 +3145,11 @@ class DentalApp(ctk.CTk):
                     tedavi_lines.append(f"{t('Diş')} {n_str}: {txt}")
             plan_str = "\n".join(tedavi_lines) if tedavi_lines else ""
 
-            # Latest x-ray file path (if any rontgen saved as a file)
-            rontgenler = h.get("rontgenler", [])
-            xray_path  = ""
-            for r in reversed(rontgenler):
-                fp = r.get("dosya_tam", r.get("dosya", ""))
-                if fp and os.path.exists(fp):
-                    xray_path = fp
-                    break
+            # Push the currently-selected röntgen (decoded from embedded base64 —
+            # robust even for manually-added röntgenler with no live file path)
+            idx = self._vr_xray_idx.get(self.aktif_hid)
+            self._push_vr_xray_by_index(self.aktif_hid, idx)
+            xray_path = XRAY_VR_CURRENT_JPG if idx is not None else ""
 
             os.makedirs(r"C:\BlueX", exist_ok=True)
             patient_data = {
@@ -3026,12 +3162,6 @@ class DentalApp(ctk.CTk):
             }
             with open(r"C:\BlueX\current_patient.json", "w", encoding="utf-8") as f:
                 json.dump(patient_data, f, ensure_ascii=False, indent=2)
-
-            if xray_path:
-                with open(XRAY_PUSH_JSON, "w", encoding="utf-8") as f:
-                    json.dump({"xray_path": xray_path,
-                               "patient_name": h.get("ad", ""),
-                               "done": False}, f, ensure_ascii=False)
 
         # Switch tab and minimize after short delay
         self._step(1)
@@ -4580,25 +4710,86 @@ class DentalApp(ctk.CTk):
                     self.tab.set(t("Rentgen"))
                 except Exception:
                     pass
-            # Push raw file path to VR
-            self._push_xray_to_vr(filepath, hid)
+            # Newly added röntgen becomes the current one shown on VR
+            new_idx = len(self.hastalar[hid]["rontgenler"]) - 1
+            self._vr_xray_idx[hid] = new_idx
+            self._push_vr_xray_by_index(hid, new_idx)
+            if hid == self.aktif_hid:
+                self._xray_vr_nav_label_guncelle()
         except Exception as e:
             tk.messagebox.showerror(t("Xəta"), f"Rentgen əlavə edilmədi:\n{e}")
 
-    def _push_xray_to_vr(self, filepath: str, hid: str):
-        """Write XRAY_PUSH_JSON so BP_XRayPanel's timer picks up the new image."""
+    def _push_vr_xray_by_index(self, hid: str, idx: int | None):
+        """Decode rontgenler[idx]["data"] and push it straight into the embedded HTTP
+        server's in-memory cache (Quest XRay Viewer app fetches it immediately, no
+        polling delay) + XRAY_VR_CURRENT_JPG/XRAY_PUSH_JSON on disk for debugging.
+        Reads the embedded base64 (always present) instead of the original scanned
+        file path (which may no longer exist / was never recorded for manually-added
+        röntgenler)."""
+        global _XRAY_HTTP_JPEG, _XRAY_HTTP_META
         try:
             os.makedirs(os.path.dirname(XRAY_PUSH_JSON), exist_ok=True)
-            payload = {
-                "xray_path":    filepath.replace("\\", "/"),
-                "patient_name": self.hastalar[hid].get("ad", ""),
-                "timestamp":    datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
-                "done":         False,
-            }
+            h = self.hastalar.get(hid, {})
+            rontgenler = h.get("rontgenler", [])
+            if idx is None or not (0 <= idx < len(rontgenler)):
+                # No röntgen for this patient — clear so the VR app doesn't keep
+                # showing a previous, wrong patient's image.
+                with _XRAY_HTTP_LOCK:
+                    _XRAY_HTTP_JPEG = None
+                    _XRAY_HTTP_META = {"patient_name": h.get("ad", ""), "timestamp": ""}
+                payload = {"xray_path": "", "patient_name": h.get("ad", ""),
+                           "timestamp": "", "done": False}
+            else:
+                r = rontgenler[idx]
+                img = Image.open(BytesIO(base64.b64decode(r["data"]))).convert("RGB")
+                buf = BytesIO()
+                img.save(buf, format="JPEG", quality=92)
+                jpeg_bytes = buf.getvalue()
+                img.save(XRAY_VR_CURRENT_JPG, format="JPEG", quality=92)
+                timestamp = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+                with _XRAY_HTTP_LOCK:
+                    _XRAY_HTTP_JPEG = jpeg_bytes
+                    _XRAY_HTTP_META = {"patient_name": h.get("ad", ""), "timestamp": timestamp}
+                payload = {
+                    "xray_path":    XRAY_VR_CURRENT_JPG.replace("\\", "/"),
+                    "patient_name": h.get("ad", ""),
+                    "timestamp":    timestamp,
+                    "xray_index":   idx,
+                    "xray_total":   len(rontgenler),
+                    "done":         False,
+                }
             with open(XRAY_PUSH_JSON, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            print(f"[XRay] push_xray_to_vr error: {e}")
+            print(f"[XRay] push_vr_xray_by_index error: {e}")
+
+    def _xray_vr_nav(self, delta: int):
+        """◀/▶ buttons: step through the active patient's röntgenler and push the new one."""
+        if not self.aktif_hid:
+            return
+        h = self.hastalar[self.aktif_hid]
+        n = len(h.get("rontgenler", []))
+        if n == 0:
+            return
+        cur = self._vr_xray_idx.get(self.aktif_hid, n - 1)
+        new_idx = max(0, min(n - 1, cur + delta))
+        self._vr_xray_idx[self.aktif_hid] = new_idx
+        self._push_vr_xray_by_index(self.aktif_hid, new_idx)
+        self._xray_vr_nav_label_guncelle()
+
+    def _xray_vr_nav_label_guncelle(self):
+        if not hasattr(self, "xray_vr_nav_lbl"):
+            return
+        if not self.aktif_hid:
+            self.xray_vr_nav_lbl.configure(text="")
+            return
+        h = self.hastalar[self.aktif_hid]
+        n = len(h.get("rontgenler", []))
+        if n == 0:
+            self.xray_vr_nav_lbl.configure(text=t("Henüz röntgen eklenmedi"))
+            return
+        idx = self._vr_xray_idx.get(self.aktif_hid, n - 1)
+        self.xray_vr_nav_lbl.configure(text=f"VR: {idx + 1} / {n}")
 
     # ── VR Layout Editor ──────────────────────────────────────────────────────
 

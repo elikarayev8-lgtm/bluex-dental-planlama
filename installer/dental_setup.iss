@@ -2,7 +2,7 @@
 ; Derleme: ISCC.exe dental_setup.iss  (çıktı: installer\BlueXDental_Setup.exe)
 
 #define AppName "BlueX Dental Planlama"
-#define AppVersion "1.1.0"
+#define AppVersion "1.2.10"
 #define AppExe "dental_planlama.exe"
 
 [Setup]
