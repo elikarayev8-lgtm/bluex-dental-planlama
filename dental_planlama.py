@@ -3,7 +3,7 @@ import customtkinter as ctk
 import tkinter as tk
 from PIL import Image, ImageDraw, ImageTk, ImageFilter, ImageFont, ImageChops
 from io import BytesIO
-import json, os, math, base64, numpy as np, threading, queue, time, uuid, copy, shutil, hashlib
+import json, os, math, base64, numpy as np, threading, queue, time, uuid, copy, shutil, hashlib, re, difflib
 from datetime import datetime, date, timedelta
 
 # ── X-ray folder watcher (watchdog) ─────────────────────────────────────────
@@ -250,6 +250,26 @@ TRANSLATIONS = {
     "STATUS": {"en": "STATUS", "ru": "СТАТУС", "tr": "DURUM"},
     "STATUS RƏNGLƏRİ": {"en": "STATUS COLORS", "ru": "ЦВЕТА СТАТУСОВ", "tr": "DURUM RENKLERİ"},
     "Geri Al": {"en": "Undo", "ru": "Отменить", "tr": "Geri Al"},
+    "Səsli Asistent": {"en": "Voice Assistant", "ru": "Голосовой помощник", "tr": "Sesli Asistan"},
+    "Səsli Əmr": {"en": "Voice Command", "ru": "Голосовая команда", "tr": "Sesli Komut"},
+    "SƏSLİ ASİSTENT": {"en": "VOICE ASSISTANT", "ru": "ГОЛОСОВОЙ ПОМОЩНИК", "tr": "SESLİ ASİSTAN"},
+    "OYADICI SÖZ": {"en": "WAKE WORD", "ru": "СЛОВО АКТИВАЦИИ", "tr": "UYANDIRMA KELİMESİ"},
+    "NÜMUNƏ İFADƏLƏR": {"en": "EXAMPLE PHRASES", "ru": "ПРИМЕРЫ ФРАЗ", "tr": "ÖRNEK İFADELER"},
+    "Səsli asistenti aktivləşdir (davamlı dinləmə)": {
+        "en": "Enable voice assistant (continuous listening)",
+        "ru": "Включить голосового помощника (постоянное прослушивание)",
+        "tr": "Sesli asistanı etkinleştir (sürekli dinleme)"},
+    "Oyadıcı sözü deyib ardından pasientə randevu vaxtı və ya dişlərə ediləcək işləri səslə deyə bilərsiniz.": {
+        "en": "Say the wake word, then speak the appointment time or the planned work for the patient's teeth.",
+        "ru": "Произнесите слово активации, затем назовите время записи или планируемую работу по зубам пациента.",
+        "tr": "Uyandırma kelimesini söyleyip ardından hasta için randevu saatini veya dişlere yapılacak işleri sesli söyleyebilirsiniz."},
+    "Qeyd: ilk aktivləşdirmədə tanıma modeli (~500MB) internetdən bir dəfəlik endirilir, sonra tam yerli (offline) işləyir. Mikrofon davamlı dinlənilir, amma heç bir səs buluda göndərilmir — hər parça yalnız yerli emal olunub dərhal atılır.": {
+        "en": "Note: on first activation the recognition model (~500MB) is downloaded once from the internet, after which it runs fully locally (offline). The microphone is listened to continuously, but no audio is ever sent to the cloud — each clip is processed locally and discarded immediately.",
+        "ru": "Примечание: при первой активации модель распознавания (~500МБ) скачивается один раз из интернета, после чего работает полностью локально (офлайн). Микрофон слушается постоянно, но ни один звук не отправляется в облако — каждый фрагмент обрабатывается локально и сразу удаляется.",
+        "tr": "Not: ilk etkinleştirmede tanıma modeli (~500MB) internetten bir kez indirilir, sonra tamamen yerel (çevrimdışı) çalışır. Mikrofon sürekli dinlenir, ancak hiçbir ses buluta gönderilmez — her parça yalnızca yerel olarak işlenip hemen atılır."},
+    "Əvvəlcə pasient seçin.": {"en": "Please select a patient first.", "ru": "Сначала выберите пациента.", "tr": "Önce bir hasta seçin."},
+    "İmtina": {"en": "Cancel", "ru": "Отмена", "tr": "İptal"},
+    "Səsli əmrlə əlavə edildi": {"en": "Added via voice command", "ru": "Добавлено голосовой командой", "tr": "Sesli komutla eklendi"},
     "Sil": {"en": "Delete", "ru": "Удалить", "tr": "Sil"},
     "Sonra": {"en": "Later", "ru": "Позже", "tr": "Sonra"},
     "TARİX (gg.aa.yyyy)": {"en": "DATE (dd.mm.yyyy)", "ru": "ДАТА (дд.мм.гггг)", "tr": "TARİH (gg.aa.yyyy)"},
@@ -392,6 +412,12 @@ def xray_watch_dir():
 def xray_subdir_only():
     return AYARLAR.get("alt_klasor_sarti", True)
 
+def sesli_asistent_aktiv():
+    return bool(AYARLAR.get("sesli_asistent_aktiv", False))
+
+def sesli_oyadici_soz():
+    return (AYARLAR.get("sesli_oyadici_soz") or "bulex").strip().lower()
+
 try:
     import pydicom as _pydicom
     _DCM_OK = True
@@ -518,10 +544,13 @@ def sb_refresh(refresh_token):
                      {"refresh_token": refresh_token})
 
 # ── OTOMATİK GÜNCELLEME KONTROLÜ ──────────────────────────────────────────────
-# `app_surumler` tablosunda (bulud, herkese açık okunabilir) en son sürüm
-# satırını okur; installer/supabase_surum_schema.sql ile kurulur. Yeni sürüm
-# yayınlanırken bu tabloya tek bir satır eklenir (surum, indirme_url, notlar).
+# GitHub Releases API-dən ("latest" release) sürüm oxunur — Supabase baza
+# kvotası dolub READ-ONLY rejimə düşdüyü üçün (bax [[dental-supabase-quota-full]])
+# bu mexanizm GitHub-a köçürülüb: hər yeni versiya GitHub Release olaraq
+# yükləndikdə (bax [[reference-bluex-github]] release axını) bu funksiya onu
+# avtomatik tapır, Supabase-dən asılılıq yoxdur.
 APP_VERSION = "1.2.10"
+GITHUB_REPO = "elikarayev8-lgtm/bluex-dental-planlama"
 
 def _ver_tuple(s):
     parcalar = []
@@ -531,23 +560,32 @@ def _ver_tuple(s):
     return tuple(parcalar)
 
 def check_for_update():
-    """Buluddaki en son sürümü sorgular. Mevcut sürümden yeniyse bilgi
-    dict'i (surum/indirme_url/notlar) döndürür, değilse ya da bulud
-    yapılandırılmamışsa/tablo yoksa None döndürür (sessizce)."""
-    if not cloud_configured():
-        return None
+    """GitHub-dakı ən son release-i sorğulayır. Mövcud versiyadan yenidirsə
+    məlumat dict'i (surum/indirme_url/notlar) qaytarır, deyilsə ya da
+    sorğu uğursuz olarsa None qaytarır (səssizcə)."""
+    import urllib.request, urllib.error
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+    req = urllib.request.Request(url, headers={
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "BlueXDental",
+    })
     try:
-        rows = _sb_http("GET",
-            "/rest/v1/app_surumler?select=surum,indirme_url,notlar&order=created_at.desc&limit=1",
-            timeout=15)
+        with urllib.request.urlopen(req, timeout=15, context=ssl_baglam()) as resp:
+            rel = json.loads(resp.read())
     except Exception:
         return None
-    if not rows:
+    surum = str(rel.get("tag_name", "")).lstrip("vV")
+    if not surum or _ver_tuple(surum) <= _ver_tuple(APP_VERSION):
         return None
-    row = rows[0]
-    if _ver_tuple(row.get("surum", "0")) > _ver_tuple(APP_VERSION):
-        return row
-    return None
+    asset = next((a for a in rel.get("assets", [])
+                  if a.get("name", "").lower() == "bluexdental_setup.exe"), None)
+    if not asset:
+        return None
+    return {
+        "surum": surum,
+        "indirme_url": asset["browser_download_url"],
+        "notlar": rel.get("body") or "",
+    }
 
 def yeni_id(prefix):
     """Zaman damğası + qısa təsadüfi son əlavə — fərqli kompüterlərdə/hekimlərdə
@@ -759,6 +797,229 @@ TEDAVILER = [
     ("gozlem",  "Gözləm",   (255, 140, 0  )),
 ]
 T_COLOR = {t[0]: t[2] for t in TEDAVILER}
+
+# ── SƏSLİ ASİSTENT — mətn təhlili (mikrofon/modeldən asılı olmayan xalis funksiyalar) ──
+# "Plan" tabındakı düymə dəstinin eynisi (bax _tbar: tab="plan" skip şərtləri) — kok/curuk
+# yalnız İlkin Vəziyyət sekmesinə aiddir, Plan/Müalicə-yə səslə yazılmır (diaqnostik
+# vəziyyətlərdir, "ediləcək/edilmiş iş" deyil).
+_SESLI_TEDAVI_TIDLER_PLAN = {"saglikli", "cekim", "kanal", "dolgu", "kron", "implant", "eksik", "gozlem"}
+_SESLI_TEDAVI_TIDLER_ILKIN = _SESLI_TEDAVI_TIDLER_PLAN | {"curuk", "kok"}
+_SESLI_TEDAVI_TIDLER_TEDAVI = _SESLI_TEDAVI_TIDLER_PLAN
+_SESLI_TAB_TIDLER = {"plan": _SESLI_TEDAVI_TIDLER_PLAN, "ilkin": _SESLI_TEDAVI_TIDLER_ILKIN,
+                      "tedavi": _SESLI_TEDAVI_TIDLER_TEDAVI}
+_SESLI_TEDAVI_ETIKET_ALL = {tid: lbl for tid, lbl, _ in TEDAVILER}
+_SESLI_TAB_ETIKET = {"plan": "Plan", "ilkin": "İlkin Vəziyyət", "tedavi": "Müalicə"}
+_SESLI_TAB_METOD = {"plan": "_uygula_plan", "ilkin": "_uygula_ilkin", "tedavi": "_uygula_tedavi"}
+
+_DIS_GECERLI = set(UST + ALT)
+
+AZ_BIRLIK = {"bir": 1, "iki": 2, "üç": 3, "uc": 3, "dörd": 4, "dord": 4,
+             "beş": 5, "bes": 5, "altı": 6, "alti": 6, "yeddi": 7,
+             "səkkiz": 8, "sekkiz": 8, "doqquz": 9,
+             # sıra sayları ("16-cı diş" təbii nitqdə "on altıncı diş" kimi deyilir —
+             # yalnız son hissə sıra şəkilçisi alır, "on" dəyişmir)
+             "birinci": 1, "ikinci": 2, "üçüncü": 3, "ucuncu": 3,
+             "dördüncü": 4, "dorduncu": 4, "beşinci": 5, "besinci": 5,
+             "altıncı": 6, "alticinci": 6, "yeddinci": 7,
+             "səkkizinci": 8, "sekkizinci": 8, "doqquzuncu": 9}
+AZ_ONLUK = {"on": 10, "iyirmi": 20, "otuz": 30, "qırx": 40, "qirx": 40}
+
+AZ_HEFTE_GUNLERI = {
+    "bazar ertəsi": 0, "bazar ertesi": 0, "çərşənbə axşamı": 1, "cersenbe axsami": 1,
+    "çərşənbə": 2, "cersenbe": 2, "cümə axşamı": 3, "cume axsami": 3,
+    "cümə": 4, "cume": 4, "şənbə": 5, "senbe": 5, "bazar": 6,
+}
+
+_AZ_TRANSLIT = str.maketrans({"ə": "e", "ı": "i", "ö": "o", "ü": "u", "ş": "s", "ç": "c", "ğ": "g"})
+
+def _az_sade(s):
+    """Azərbaycan hərflərini (ə/ı/ö/ü/ş/ç/ğ) ASCII qarşılıqlarına çevirir — Whisper
+    STT-nin diakritikləri tutarsız yazması (məs. "dolğu" / "dolgu") üzündən sözlərin
+    tanınmaması problemini aradan qaldırmaq üçün, mətn müqayisələrindən əvvəl tətbiq edilir."""
+    return s.lower().translate(_AZ_TRANSLIT)
+
+def _metinden_dis_no(text):
+    """Mətndə keçən keçərli FDI diş nömrələrini (11-18,21-28,31-38,41-48) tapır —
+    rəqəmlə ("16") və ya söz-rəqəmlə ("on altı") yazılmış formaları dəstəkləyir."""
+    tapilanlar = []
+    for raw in re.findall(r"\d{1,2}", text):
+        n = int(raw)
+        if n in _DIS_GECERLI and n not in tapilanlar:
+            tapilanlar.append(n)
+    sozler = re.findall(r"[a-zçəğıöşüA-ZÇƏĞIÖŞÜ]+", text.lower())
+    i = 0
+    while i < len(sozler):
+        soz = sozler[i]
+        if soz in AZ_ONLUK:
+            deger = AZ_ONLUK[soz]
+            if i + 1 < len(sozler) and sozler[i + 1] in AZ_BIRLIK:
+                deger += AZ_BIRLIK[sozler[i + 1]]
+                i += 1
+            if deger in _DIS_GECERLI and deger not in tapilanlar:
+                tapilanlar.append(deger)
+        i += 1
+    return tapilanlar
+
+def _metinden_tedavi(text, tid_set):
+    """Mətndə TEDAVILER etiketlərindən, verilən `tid_set` (tab-a uyğun icazəli tid-lər)
+    içindəkilərdən birinin keçib-keçmədiyini yoxlayır — tapılarsa tid qaytarır,
+    tapılmazsa None."""
+    alcaq = _az_sade(text)
+    for tid in tid_set:
+        lbl = _az_sade(_SESLI_TEDAVI_ETIKET_ALL[tid])
+        if lbl in alcaq:
+            return tid
+    # tam etiketdən qısa, təbii tələffüz sinonimləri (hamısı _az_sade ilə artıq
+    # diakritiksiz müqayisə olunur, ona görə "dolğu"/"dolgu" eyni "dolgu" kimi tutulur)
+    SINONIM = {"dolgu": "dolgu", "qapaq": "kron", "implant": "implant",
+               "cekim": "cekim", "eksik": "eksik", "gozlem": "gozlem", "saglam": "saglikli",
+               "curuk": "curuk", "kok": "kok"}
+    for soz, tid in SINONIM.items():
+        if soz in alcaq and tid in tid_set:
+            return tid
+    return None
+
+def _metinden_randevu_tarixi(text, indi=None):
+    """Mətndəki 'bu gün/sabah/birigün/həftənin günü' ifadəsini ISO tarixə çevirir.
+    Heç biri tapılmazsa bugünkü tarixi qaytarır (saat ayrıca təhlil olunur)."""
+    indi = indi or datetime.now()
+    alcaq = text.lower()
+    if "birigün" in alcaq or "o biri gün" in alcaq or "o biri gun" in alcaq:
+        return (indi + timedelta(days=2)).date().isoformat()
+    if "sabah" in alcaq:
+        return (indi + timedelta(days=1)).date().isoformat()
+    if "bu gün" in alcaq or "bu gun" in alcaq or "bugün" in alcaq:
+        return indi.date().isoformat()
+    for gun_adi, hedef_weekday in AZ_HEFTE_GUNLERI.items():
+        if gun_adi in alcaq:
+            fark = (hedef_weekday - indi.weekday()) % 7
+            fark = fark or 7   # eyni gün deyilibsə NÖVBƏTİ həftəyə düşsün
+            return (indi + timedelta(days=fark)).date().isoformat()
+    return indi.date().isoformat()
+
+def _metinden_saat(text):
+    """Mətndəki 'saat N' / 'saat N:MM' ifadəsini 'HH:MM' formatına çevirir, tapılmazsa None."""
+    m = re.search(r"saat\s+(\d{1,2})[:\.]?(\d{2})?", text.lower())
+    if not m:
+        return None
+    hh = int(m.group(1))
+    mm = int(m.group(2)) if m.group(2) else 0
+    if not (0 <= hh <= 23 and 0 <= mm <= 59):
+        return None
+    return f"{hh:02d}:{mm:02d}"
+
+def _metinden_xeste_adi(text, hastalar):
+    """Mətndə bilinən pasient adlarından biri keçirsə onu qaytarır (tapılmazsa None)."""
+    alcaq = text.lower()
+    adlar = sorted({h.get("ad", "") for h in hastalar.values() if h.get("ad")},
+                   key=len, reverse=True)   # uzun adlar əvvəlcə — qismən üst-üstə düşməni önləyir
+    for ad in adlar:
+        if ad.lower() in alcaq:
+            return ad
+    return None
+
+_AD_UCUN_RE = re.compile(r"([a-zA-ZçəğıöşüÇƏĞIÖŞÜ]+(?:\s+[a-zA-ZçəğıöşüÇƏĞIÖŞÜ]+)?)\s+üçün\b",
+                          re.IGNORECASE)
+
+def _metinden_yeni_xeste_adi(text):
+    """Mətndə mövcud siyahıda OLMAYAN (yeni) pasient adı namizədini "<Ad> üçün" qəlibi
+    ilə çıxarır (məs. "Aysel üçün on altıncı dişə kanal et"). Təsadüfi sözlərin ad kimi
+    tutulmasının qarşısını almaq üçün YALNIZ bu aydın dil qəlibi qəbul edilir — sərbəst
+    söz axtarışı yoxdur. Tapılmazsa None qaytarır."""
+    m = _AD_UCUN_RE.search(text)
+    if not m:
+        return None
+    ad = m.group(1).strip()
+    return ad.title() if ad else None
+
+def _oyadici_soz_tap(text, oyadici):
+    """Mətndə oyadıcı sözü tapmağa çalışır. Əvvəlcə tam substring, tapılmazsa
+    mətnin ilk bir neçə sözündən STT-nin fonetik səhvlərinə dözümlü bulanıq
+    uyğunlaşdırma (SequenceMatcher) ilə axtarır (məs. "bulex" Whisper
+    tərəfindən "buleks"/"bules" kimi yazıla bilər). Tapılarsa mətndəki bitmə
+    indeksini (əmrin başladığı yer), tapılmazsa None qaytarır."""
+    alcaq = _az_sade(text)
+    oyadici = _az_sade(oyadici)
+    idx = alcaq.find(oyadici)
+    if idx != -1:
+        return idx + len(oyadici)
+    en_yaxsi = None
+    sozler = list(re.finditer(r"[a-z]+", alcaq))[:5]
+    # tək sözlər (Whisper oyadıcı sözü tam tutarsa)
+    for m in sozler:
+        soz = m.group()
+        oxsarlik = difflib.SequenceMatcher(None, soz, oyadici).ratio()
+        if oxsarlik >= 0.55 and (en_yaxsi is None or oxsarlik > en_yaxsi[0]):
+            en_yaxsi = (oxsarlik, m.end())
+    # qonşu söz cütləri (Whisper oyadıcı sözü iki hissəyə bölübsə, məs. "bu" + "leks")
+    for m1, m2 in zip(sozler, sozler[1:]):
+        cut = alcaq[m1.start():m2.end()]
+        oxsarlik = difflib.SequenceMatcher(None, cut, oyadici).ratio()
+        if oxsarlik >= 0.55 and (en_yaxsi is None or oxsarlik > en_yaxsi[0]):
+            en_yaxsi = (oxsarlik, m2.end())
+    return en_yaxsi[1] if en_yaxsi else None
+
+def parse_sesli_emr(text, hastalar, aktif_hasta_adi=None):
+    """Oyadıcı sözdən sonrakı mətni təhlil edib niyyəti müəyyən edir. Qaytarır:
+    {"niyyet": "randevu", "xeste_adi", "yeni_pasient", "tarix", "saat"} və ya
+    {"niyyet": "plan", "tab": "plan"/"ilkin"/"tedavi", "dis_nolari": [...], "tid",
+     "xeste_adi", "yeni_pasient"} və ya None (anlaşılmadı)."""
+    if not text or not text.strip():
+        return None
+    alcaq = _az_sade(text)
+    tarix_bulundu = _metinden_saat(text) is not None or "randevu" in alcaq \
+        or "sabah" in alcaq or "bugun" in alcaq or "bu gun" in alcaq \
+        or "birigun" in alcaq or any(_az_sade(g) in alcaq for g in AZ_HEFTE_GUNLERI)
+    if "ilkin" in alcaq:
+        tab = "ilkin"
+    elif "mualice" in alcaq or "edildi" in alcaq or "tamamlandi" in alcaq:
+        tab = "tedavi"
+    else:
+        tab = "plan"
+    dis_nolari = _metinden_dis_no(text)
+    tid = _metinden_tedavi(text, _SESLI_TAB_TIDLER[tab])
+    bilinen_ad = _metinden_xeste_adi(text, hastalar)
+    yeni_ad = None if bilinen_ad else _metinden_yeni_xeste_adi(text)
+    yeni_pasient = bool(yeni_ad and not bilinen_ad)
+    if tarix_bulundu and not (dis_nolari and tid):
+        xeste_adi = bilinen_ad or yeni_ad or aktif_hasta_adi
+        if not xeste_adi:
+            return None
+        return {
+            "niyyet": "randevu",
+            "xeste_adi": xeste_adi,
+            "yeni_pasient": yeni_pasient,
+            "tarix": _metinden_randevu_tarixi(text),
+            "saat": _metinden_saat(text) or "09:00",
+        }
+    if dis_nolari and tid:
+        return {
+            "niyyet": "plan",
+            "tab": tab,
+            "dis_nolari": dis_nolari,
+            "tid": tid,
+            "xeste_adi": bilinen_ad or yeni_ad,
+            "yeni_pasient": yeni_pasient,
+        }
+    return None
+
+_WHISPER_MODEL_CACHE = {}
+
+def _whisper_model_dir():
+    return os.path.join(os.path.dirname(DATA_FILE), "whisper_models")
+
+def _whisper_model_yukle():
+    """Whisper modelini bir dəfə yükləyib keşləyir (çağırışlar arası təkrar
+    yüklənmir). İlk çağırışda model yerli keşdə yoxdursa internetdən endirilir
+    (bir dəfəlik, ~500MB) — bu funksiya arxa-plan thread-dən çağırılmalıdır,
+    UI thread-ini bloklamasın deyə."""
+    if "model" not in _WHISPER_MODEL_CACHE:
+        from faster_whisper import WhisperModel
+        kesh_dir = _whisper_model_dir()
+        os.makedirs(kesh_dir, exist_ok=True)
+        _WHISPER_MODEL_CACHE["model"] = WhisperModel(
+            "small", device="cpu", compute_type="int8", download_root=kesh_dir)
+    return _WHISPER_MODEL_CACHE["model"]
 
 # Her tedavinin hangi katmana uygulandığı
 # "tac"=diş gövdesi, "kanal"=oval indikatör, "kron"=border
@@ -1844,6 +2105,12 @@ class DentalApp(ctk.CTk):
         # ── Otomatik güncelleme kontrolü (sessiz — açılıştan birkaç saniye sonra) ──
         self.after(4000, lambda: self._guncelleme_kontrol_et(sessiz=True))
 
+        # ── Səsli asistent (aktiv olarsa, açılışdan 2sn sonra arxa planda başlayır) ──
+        self._sesli_stop_event = threading.Event()
+        self._sesli_thread = None
+        if sesli_asistent_aktiv():
+            self.after(2000, self._sesli_baslat)
+
         # ── Randevu vaxtı çatanda "gəldi" təsdiqi (2 dəqiqə cavabsız qalsa avtomatik) ──
         self._randevu_prompted = set()
         self.after(15000, self._randevu_tick)
@@ -1890,8 +2157,11 @@ class DentalApp(ctk.CTk):
                       command=self._ayarlar_ac).grid(row=6,column=0,padx=10,pady=(4,4),sticky="ew")
         self.cloud_status_lbl = ctk.CTkLabel(sol,text="",font=ctk.CTkFont(size=10),
                                              text_color="#7A99C4")
-        self.cloud_status_lbl.grid(row=7,column=0,padx=12,pady=(0,10),sticky="w")
+        self.cloud_status_lbl.grid(row=7,column=0,padx=12,pady=(0,2),sticky="w")
         self._cloud_status_guncelle()
+        self.sesli_status_lbl = ctk.CTkLabel(sol,text="",font=ctk.CTkFont(size=10),
+                                             text_color="#7A99C4")
+        self.sesli_status_lbl.grid(row=8,column=0,padx=12,pady=(0,10),sticky="w")
 
         self.sag = ctk.CTkFrame(self,fg_color=TH["bg"],corner_radius=0)
         self.sag.grid(row=0,column=1,sticky="nsew")
@@ -3616,7 +3886,7 @@ class DentalApp(ctk.CTk):
         import tkinter.messagebox
         win = ctk.CTkToplevel(self, fg_color=TH["bg"])
         win.title(t("Ayarlar"))
-        win.geometry("560x480")
+        win.geometry("560x560")
         win.attributes("-topmost", True)
         win.grab_set()
 
@@ -3629,6 +3899,7 @@ class DentalApp(ctk.CTk):
         tab.pack(fill="both", expand=True, padx=12, pady=12)
         t_umumi = tab.add(t("Ümumi"))
         t_bulud = tab.add(t("Bulud"))
+        t_sesli = tab.add(t("Səsli Asistent"))
         t_haqqinda = tab.add(t("Haqqında"))
 
         DIL_SECENEKLERI = [("az", "Azərbaycan"), ("en", "English"), ("ru", "Русский"), ("tr", "Türkçe")]
@@ -3983,6 +4254,61 @@ class DentalApp(ctk.CTk):
                 cstatus.pack(anchor="w", padx=18, pady=(6, 12))
 
         _cloud_section_build()
+
+        # ── Səsli Asistent ──
+        ctk.CTkLabel(t_sesli, text=t("SƏSLİ ASİSTENT"),
+                     font=ctk.CTkFont(size=11, weight="bold"),
+                     text_color=TH["accent"]).pack(anchor="w", pady=(12, 2))
+        ctk.CTkLabel(t_sesli,
+                     text=t("Oyadıcı sözü deyib ardından pasientə randevu vaxtı və ya dişlərə "
+                            "ediləcək işləri səslə deyə bilərsiniz."),
+                     font=ctk.CTkFont(size=11), text_color=TH["txt_sub"],
+                     wraplength=480, justify="left").pack(anchor="w", pady=(0, 10))
+
+        sesli_aktiv_var = tk.BooleanVar(value=sesli_asistent_aktiv())
+
+        def _sesli_toggle():
+            AYARLAR["sesli_asistent_aktiv"] = sesli_aktiv_var.get()
+            ayar_kaydet(AYARLAR)
+            if sesli_aktiv_var.get():
+                self._sesli_baslat()
+            else:
+                self._sesli_dayandir()
+
+        ctk.CTkCheckBox(t_sesli, text=t("Səsli asistenti aktivləşdir (davamlı dinləmə)"),
+                        variable=sesli_aktiv_var, font=ctk.CTkFont(size=12),
+                        text_color=TH["txt"], command=_sesli_toggle).pack(anchor="w", pady=(0, 10))
+
+        ctk.CTkLabel(t_sesli, text=t("OYADICI SÖZ"), font=ctk.CTkFont(size=11, weight="bold"),
+                     text_color=TH["accent"]).pack(anchor="w", pady=(4, 2))
+        oyadici_var = tk.StringVar(value=sesli_oyadici_soz())
+
+        def _oyadici_kaydet(*_):
+            AYARLAR["sesli_oyadici_soz"] = (oyadici_var.get() or "bulex").strip().lower()
+            ayar_kaydet(AYARLAR)
+
+        oyadici_entry = ctk.CTkEntry(t_sesli, textvariable=oyadici_var, width=200, height=32,
+                                      border_color=TH["accent_soft"])
+        oyadici_entry.pack(anchor="w", pady=(0, 10))
+        oyadici_entry.bind("<FocusOut>", _oyadici_kaydet)
+
+        ctk.CTkFrame(t_sesli, height=1, fg_color="#3B5E8F").pack(fill="x", pady=(0, 10))
+        ctk.CTkLabel(t_sesli, text=t("NÜMUNƏ İFADƏLƏR"), font=ctk.CTkFont(size=11, weight="bold"),
+                     text_color=TH["accent"]).pack(anchor="w", pady=(0, 2))
+        ctk.CTkLabel(t_sesli,
+                     text="„Bulex, 16-cı dişdə kanal”\n"
+                          "„Bulex, 24 və 25-ci dişlərə kompozit dolğu”\n"
+                          "„Bulex, Əliyevə sabah saat üçdə randevu”",
+                     font=ctk.CTkFont(size=11), text_color=TH["txt_sub"],
+                     justify="left").pack(anchor="w")
+
+        ctk.CTkLabel(t_sesli,
+                     text=t("Qeyd: ilk aktivləşdirmədə tanıma modeli (~500MB) internetdən bir "
+                            "dəfəlik endirilir, sonra tam yerli (offline) işləyir. Mikrofon "
+                            "davamlı dinlənilir, amma heç bir səs buluda göndərilmir — hər "
+                            "parça yalnız yerli emal olunub dərhal atılır."),
+                     font=ctk.CTkFont(size=10), text_color=TH["txt_faint"],
+                     wraplength=480, justify="left").pack(anchor="w", pady=(14, 4))
 
         ctk.CTkLabel(t_haqqinda, text=f"Sürüm: v{APP_VERSION}",
                      font=ctk.CTkFont(size=13, weight="bold"), text_color=TH["txt"]
@@ -5001,11 +5327,326 @@ class DentalApp(ctk.CTk):
             pass
         self.after(300, self._on_close)
 
+    # ── SƏSLİ ASİSTENT ──────────────────────────────────────────────────────
+    def _sesli_status_configure(self, text, color=None):
+        def ui():
+            try:
+                self.sesli_status_lbl.configure(text=text, text_color=color or "#7A99C4")
+            except Exception:
+                pass
+        try:
+            self.after(0, ui)
+        except Exception:
+            pass
+
+    def _sesli_baslat(self):
+        if self._sesli_thread and self._sesli_thread.is_alive():
+            return
+        try:
+            import sounddevice  # noqa: F401 — mövcudluğu yoxlamaq üçün
+        except Exception as e:
+            self._sesli_status_configure(t("🎤 Səsli asistent işə düşmədi"), "#C0392B")
+            print(f"[Sesli] sounddevice yuklenmedi: {e}")
+            return
+        self._sesli_stop_event.clear()
+        self._sesli_status_configure(t("🎤 Model yüklənir…"), TH["accent"])
+        self._sesli_thread = threading.Thread(target=self._sesli_loop, daemon=True)
+        self._sesli_thread.start()
+
+    def _sesli_dayandir(self):
+        self._sesli_stop_event.set()
+        self._sesli_status_configure("")
+
+    def _sesli_loop(self):
+        try:
+            import sounddevice as sd
+            import numpy as _np
+            model = _whisper_model_yukle()
+        except Exception as e:
+            self._sesli_status_configure(t("🎤 Model yüklənmədi"), "#C0392B")
+            print(f"[Sesli] model yuklenmedi: {e}")
+            return
+        self._sesli_status_configure(t("🎤 Dinləyir…"), "#0E9F6E")
+
+        SR = 16000
+        BLOK = 1600          # 0.1s @ 16kHz
+        ESIK = 0.008         # RMS enerji — nitq başladığını aşkarlama həddi
+        SESSIZLIK_SN = 0.7   # bu qədər davamlı sükut = nitq parçası bitdi
+        MAKS_PARCA_SN = 8.0  # bir parça üçün maksimum müddət (asılı qalmasın)
+
+        q = queue.Queue()
+
+        def callback(indata, frames, time_info, status):
+            q.put(indata[:, 0].copy())
+
+        buffer = []
+        danisiq_basladi = False
+        sessiz_say = 0.0
+        parca_sure = 0.0
+        ilk_ses_vaxti = None
+        basladi_vaxti = time.time()
+        xeberdarliq_gosterildi = False
+
+        try:
+            with sd.InputStream(samplerate=SR, channels=1, dtype="float32",
+                                 blocksize=BLOK, callback=callback):
+                while not self._sesli_stop_event.is_set():
+                    try:
+                        chunk = q.get(timeout=0.2)
+                    except queue.Empty:
+                        # mikrofon heç nə tutmursa (icazə yoxdur/yanlış cihaz),
+                        # bunu bir müddət sonra istifadəçiyə bildir
+                        if not xeberdarliq_gosterildi and ilk_ses_vaxti is None \
+                                and (time.time() - basladi_vaxti) > 20:
+                            xeberdarliq_gosterildi = True
+                            self._sesli_status_configure(
+                                t("🎤 Mikrofon səs aşkarlamır — Windows mikrofon icazələrini yoxlayın"),
+                                "#C0392B")
+                        continue
+                    enerji = float(_np.sqrt(_np.mean(chunk ** 2))) if len(chunk) else 0.0
+                    sn = len(chunk) / SR
+                    if enerji > ESIK:
+                        if ilk_ses_vaxti is None:
+                            ilk_ses_vaxti = time.time()
+                        buffer.append(chunk)
+                        danisiq_basladi = True
+                        sessiz_say = 0.0
+                        parca_sure += sn
+                    elif danisiq_basladi:
+                        buffer.append(chunk)
+                        sessiz_say += sn
+                        parca_sure += sn
+                    elif not xeberdarliq_gosterildi and ilk_ses_vaxti is None \
+                            and (time.time() - basladi_vaxti) > 20:
+                        xeberdarliq_gosterildi = True
+                        self._sesli_status_configure(
+                            t("🎤 Mikrofon səs aşkarlamır — Windows mikrofon icazələrini yoxlayın"),
+                            "#C0392B")
+
+                    if danisiq_basladi and (sessiz_say >= SESSIZLIK_SN or parca_sure >= MAKS_PARCA_SN):
+                        audio = _np.concatenate(buffer)
+                        buffer = []
+                        danisiq_basladi = False
+                        sessiz_say = 0.0
+                        parca_sure = 0.0
+                        if len(audio) / SR >= 0.4:
+                            self._sesli_parca_isle(model, audio)
+        except Exception as e:
+            self._sesli_status_configure(t("🎤 Mikrofon xətası"), "#C0392B")
+            print(f"[Sesli] mikrofon xetasi: {e}")
+
+    def _sesli_parca_isle(self, model, audio):
+        """Bir nitq parçasını yazıya köçürür, oyadıcı sözü axtarır, tapılsa
+        əmri təhlil edib təsdiq dialoqunu açır. Bütün emal yerli (offline) baş
+        verir, audio dərhal atılır — heç yerə göndərilmir/saxlanılmır.
+        DİQQƏT: tapılıb-tapılmamasından asılı olmayaraq eşidilən mətni qısa
+        müddət sidebar-da göstərir — mikrofon/tanıma işləyib-işləmədiyini
+        istifadəçinin özünün görə bilməsi üçün (əsas diaqnostika aləti)."""
+        oyadici = sesli_oyadici_soz()
+        # domen lüğəti + oyadıcı sözü decoder-ə "ipucu" kimi verir — Whisper-in
+        # məhdud Azərbaycan dili dəstəyi ilə bu terminləri düzgün yazma ehtimalını artırır
+        ipucu = f"{oyadici}, kanal, dolğu, qapaq, çəkim, implant, əksik, gözləm, randevu, saat, sabah, bu gün."
+        try:
+            segments, _info = model.transcribe(
+                audio, language="az", vad_filter=True, initial_prompt=ipucu)
+            text = " ".join(seg.text for seg in segments).strip()
+        except Exception as e:
+            print(f"[Sesli] transkripsiya xetasi: {e}")
+            return
+        if not text:
+            self._sesli_status_configure(t("🎤 (səs eşidildi, söz tanınmadı)"), "#7A99C4")
+            self.after(2000, lambda: self._sesli_status_configure(t("🎤 Dinləyir…"), "#0E9F6E"))
+            return
+        self._sesli_status_configure(f"🎤 Eşidildi: “{text[:50]}”", "#7A99C4")
+        son = _oyadici_soz_tap(text, oyadici)
+        if son is None:
+            self.after(2500, lambda: self._sesli_status_configure(t("🎤 Dinləyir…"), "#0E9F6E"))
+            return
+        emr_metni = text[son:].strip(" ,.:;!?-")
+        if not emr_metni:
+            self._sesli_status_configure(t("🎤 Dinləyir… (əmr gözlənilir)"), "#0E9F6E")
+            self.after(2500, lambda: self._sesli_status_configure(t("🎤 Dinləyir…"), "#0E9F6E"))
+            return
+        aktif_adi = None
+        if self.aktif_hid and self.aktif_hid in self.hastalar:
+            aktif_adi = self.hastalar[self.aktif_hid].get("ad")
+        netice = parse_sesli_emr(emr_metni, self.hastalar, aktif_hasta_adi=aktif_adi)
+        if not netice:
+            self._sesli_status_configure(t("🎤 Anlaşılmadı"), "#C0392B")
+            self.after(2500, lambda: self._sesli_status_configure(t("🎤 Dinləyir…"), "#0E9F6E"))
+            return
+        self.after(0, lambda: self._sesli_konfirm_dialog(netice))
+
+    def _sesli_konfirm_dialog(self, netice):
+        if netice["niyyet"] == "plan":
+            self._sesli_tedavi_dialog(netice)
+        else:
+            self._sesli_randevu_dialog(netice)
+
+    def _sesli_yeni_pasient_yarat(self, ad):
+        """Səsli əmrlə yeni pasient yaradır — manual '+ Yeni Pasient' (_yeni_hasta)
+        ilə eyni minimal struktur (yalnız ad + 1 boş vaka), InputDialog olmadan
+        (ad artıq səsdən gəlir). (hid, vid) qaytarır."""
+        hid = yeni_id("hasta")
+        vid = yeni_id("vaka")
+        self.hastalar[hid] = {
+            "ad": ad,
+            "vakalar": {
+                vid: {
+                    "ad": f"1. {t('Vaka')}",
+                    "tarih": datetime.now().strftime("%d.%m.%Y"),
+                    "plan": {}, "tedavi": {}
+                }
+            }
+        }
+        veri_kaydet(self.hastalar)
+        self._auto_bxd_backup(hid)
+        self.expanded_hids.add(hid)
+        self._lista_guncelle()
+        return hid, vid
+
+    def _sesli_tedavi_dialog(self, netice):
+        """Plan/İlkin Vəziyyət/Müalicə (3 tab ortaq) üçün təsdiq dialoqu. Hədəf pasient
+        ya hazırkı aktiv pasientdir, ya mətndə "<ad> üçün" ilə tapılan MÖVCUD pasientdir
+        (təsdiqləndikdə ekran ona keçir), ya da tapılmayıb YENİ yaradılacaq pasientdir."""
+        tab = netice["tab"]
+        dis_nolari = netice["dis_nolari"]
+        tid = netice["tid"]
+        soylenen_ad = netice.get("xeste_adi")
+        yeni_pasient = netice.get("yeni_pasient", False)
+
+        hedef_hid = None
+        nisan = None
+        if yeni_pasient:
+            goster_ad = soylenen_ad
+            nisan = t("🆕 YENİ PASİENT")
+        elif soylenen_ad:
+            hedef_hid = next((hid for hid, h in self.hastalar.items()
+                               if h.get("ad", "") == soylenen_ad), None)
+            goster_ad = soylenen_ad
+            if hedef_hid is None:
+                # nəzəri olaraq baş verməməlidir (parse_sesli_emr artıq uyğunlaşdırıb),
+                # amma qorunma: tapılmasa indiki aktiv pasientə düş
+                hedef_hid = None
+            elif hedef_hid != self.aktif_hid:
+                nisan = t("↔ Pasient dəyişəcək")
+        else:
+            goster_ad = None
+
+        if hedef_hid is None and not yeni_pasient:
+            if not self.aktif_hid or not self.aktif_vid:
+                import tkinter.messagebox as mb
+                mb.showwarning(t("Səsli Əmr"), t("Əvvəlcə pasient seçin."))
+                return
+            hedef_hid = self.aktif_hid
+            goster_ad = self.hastalar.get(self.aktif_hid, {}).get("ad", "")
+
+        lbl = t(_SESLI_TEDAVI_ETIKET_ALL.get(tid, tid))
+        tab_lbl = t(_SESLI_TAB_ETIKET[tab])
+        dis_metni = ", ".join(f"{n} ({dis_adi(n)})" for n in dis_nolari)
+
+        dlg = ctk.CTkToplevel(self, fg_color=TH["bg"])
+        dlg.title(t("Səsli Əmr"))
+        dlg.geometry("420x260")
+        dlg.attributes("-topmost", True)
+        ctk.CTkLabel(dlg, text=t("🎤 Anladıq"), font=ctk.CTkFont(size=16, weight="bold"),
+                     text_color=TH["accent"]).pack(pady=(20, 6))
+        if nisan:
+            ctk.CTkLabel(dlg, text=nisan, font=ctk.CTkFont(size=11, weight="bold"),
+                         text_color=TH["accent"]).pack(pady=(0, 2))
+        ctk.CTkLabel(dlg, text=goster_ad, font=ctk.CTkFont(size=13, weight="bold"),
+                     text_color=TH["txt"]).pack(pady=2)
+        ctk.CTkLabel(dlg, text=f"[{tab_lbl}]  {t('Diş')} {dis_metni}\n→ {lbl}",
+                     font=ctk.CTkFont(size=13), text_color=TH["txt_sub"],
+                     wraplength=360, justify="center").pack(pady=(2, 10))
+
+        def _tesdiq():
+            nonlocal hedef_hid
+            if yeni_pasient:
+                hedef_hid, vid = self._sesli_yeni_pasient_yarat(soylenen_ad)
+                self._yukle(hedef_hid, vid)
+            elif hedef_hid != self.aktif_hid:
+                self._yukle(hedef_hid)
+            self.secili_tedavi = tid
+            metod = getattr(self, _SESLI_TAB_METOD[tab])
+            for n in dis_nolari:
+                metod(n, None)
+            try: dlg.destroy()
+            except Exception: pass
+
+        def _legv():
+            try: dlg.destroy()
+            except Exception: pass
+
+        btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
+        btn_row.pack(pady=10)
+        ctk.CTkButton(btn_row, text=t("✓ Təsdiqlə"), width=130, height=34, corner_radius=10,
+                      fg_color=TH["ok"], hover_color=TH["ok_hover"],
+                      font=ctk.CTkFont(size=12, weight="bold"), command=_tesdiq).pack(side="left", padx=6)
+        ctk.CTkButton(btn_row, text=t("İmtina"), width=110, height=34, corner_radius=10,
+                      fg_color="transparent", border_width=1, border_color=TH["accent_soft"],
+                      text_color=TH["accent"], command=_legv).pack(side="left", padx=6)
+
+    def _sesli_randevu_dialog(self, netice):
+        xeste_adi = netice["xeste_adi"]
+        yeni_pasient = netice.get("yeni_pasient", False)
+        tarix_iso = netice["tarix"]
+        saat = netice["saat"]
+        tarix_goster = datetime.strptime(tarix_iso, "%Y-%m-%d").strftime("%d.%m.%Y")
+        eslesen_hid = None if yeni_pasient else next(
+            (hid for hid, h in self.hastalar.items() if h.get("ad", "") == xeste_adi), None)
+
+        dlg = ctk.CTkToplevel(self, fg_color=TH["bg"])
+        dlg.title(t("Səsli Əmr"))
+        dlg.geometry("400x240")
+        dlg.attributes("-topmost", True)
+        ctk.CTkLabel(dlg, text=t("🎤 Anladıq"), font=ctk.CTkFont(size=16, weight="bold"),
+                     text_color=TH["accent"]).pack(pady=(20, 6))
+        if yeni_pasient:
+            ctk.CTkLabel(dlg, text=t("🆕 YENİ PASİENT"), font=ctk.CTkFont(size=11, weight="bold"),
+                         text_color=TH["accent"]).pack(pady=(0, 2))
+        ctk.CTkLabel(dlg, text=xeste_adi, font=ctk.CTkFont(size=14, weight="bold"),
+                     text_color=TH["txt"]).pack(pady=2)
+        ctk.CTkLabel(dlg, text=f"{tarix_goster}  ·  {t('saat')} {saat}",
+                     font=ctk.CTkFont(size=13), text_color=TH["txt_sub"]).pack(pady=(2, 10))
+
+        def _tesdiq():
+            nonlocal eslesen_hid
+            if yeni_pasient:
+                eslesen_hid, _vid = self._sesli_yeni_pasient_yarat(xeste_adi)
+            rid2 = yeni_id("randevu")
+            self.randevular[rid2] = {
+                "hasta_id": eslesen_hid,
+                "hasta_ad": xeste_adi,
+                "tarix": tarix_iso,
+                "saat": saat,
+                "muddet": 30,
+                "qeyd": t("Səsli əmrlə əlavə edildi"),
+                "status": "gozleyir",
+            }
+            randevu_kaydet(self.randevular)
+            try: dlg.destroy()
+            except Exception: pass
+
+        def _legv():
+            try: dlg.destroy()
+            except Exception: pass
+
+        btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
+        btn_row.pack(pady=10)
+        ctk.CTkButton(btn_row, text=t("✓ Təsdiqlə"), width=130, height=34, corner_radius=10,
+                      fg_color=TH["ok"], hover_color=TH["ok_hover"],
+                      font=ctk.CTkFont(size=12, weight="bold"), command=_tesdiq).pack(side="left", padx=6)
+        ctk.CTkButton(btn_row, text=t("İmtina"), width=110, height=34, corner_radius=10,
+                      fg_color="transparent", border_width=1, border_color=TH["accent_soft"],
+                      text_color=TH["accent"], command=_legv).pack(side="left", padx=6)
+
     def _on_close(self):
         """Stop background watcher thread before destroying the window."""
         if self._xray_observer and self._xray_observer.is_alive():
             self._xray_observer.stop()
             self._xray_observer.join(timeout=2)
+        self._sesli_dayandir()
         self.destroy()
 
 
