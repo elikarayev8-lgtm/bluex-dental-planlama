@@ -4282,15 +4282,27 @@ class DentalApp(ctk.CTk):
         ctk.CTkLabel(t_sesli, text=t("OYADICI SÖZ"), font=ctk.CTkFont(size=11, weight="bold"),
                      text_color=TH["accent"]).pack(anchor="w", pady=(4, 2))
         oyadici_var = tk.StringVar(value=sesli_oyadici_soz())
+        oyadici_status = ctk.CTkLabel(t_sesli, text="", font=ctk.CTkFont(size=10),
+                                       text_color="#2E7D32")
 
         def _oyadici_kaydet(*_):
             AYARLAR["sesli_oyadici_soz"] = (oyadici_var.get() or "bulex").strip().lower()
             ayar_kaydet(AYARLAR)
+            try:
+                oyadici_status.configure(text=t("✓ Saxlandı"))
+                self.after(1500, lambda: oyadici_status.configure(text=""))
+            except Exception:
+                pass
 
         oyadici_entry = ctk.CTkEntry(t_sesli, textvariable=oyadici_var, width=200, height=32,
                                       border_color=TH["accent_soft"])
-        oyadici_entry.pack(anchor="w", pady=(0, 10))
+        oyadici_entry.pack(anchor="w", pady=(0, 2))
+        # "FocusOut" tək başına kifayət deyildi — istifadəçi sözü yazıb Enter basanda
+        # (fokus sahədən çıxmadığı üçün) heç nə saxlanmırdı; Return/KP_Enter də əlavə edildi.
         oyadici_entry.bind("<FocusOut>", _oyadici_kaydet)
+        oyadici_entry.bind("<Return>", _oyadici_kaydet)
+        oyadici_entry.bind("<KP_Enter>", _oyadici_kaydet)
+        oyadici_status.pack(anchor="w", pady=(0, 8))
 
         ctk.CTkFrame(t_sesli, height=1, fg_color="#3B5E8F").pack(fill="x", pady=(0, 10))
         ctk.CTkLabel(t_sesli, text=t("NÜMUNƏ İFADƏLƏR"), font=ctk.CTkFont(size=11, weight="bold"),
