@@ -5382,7 +5382,13 @@ class DentalApp(ctk.CTk):
 
         SR = 16000
         BLOK = 1600          # 0.1s @ 16kHz
-        ESIK = 0.008         # RMS enerji — nitq başladığını aşkarlama həddi
+        # Sabit RMS həddi (əvvəlki "ESIK=0.008") canlı sınaqda heç vaxt keçilmədi —
+        # mikrofonun real səs səviyyəsi avadanlıqdan/qazancdan asılı olaraq çox dəyişir,
+        # ona görə sabit rəqəm əvəzinə ətraf səs-küyə uyğunlaşan dinamik hədd istifadə olunur.
+        MIN_ESIK = 0.0015    # mütləq minimum — tam sükunda belə yanlış tətiklənməsin
+        ESIK_ZERB = 2.5      # dinamik hədd = ətraf səs-küy × bu əmsal
+        ESIK_EMA = 0.03      # ətraf səs-küy təxmininin neçə sürətlə yenilənməsi
+        noise_floor = 0.0025 # ilkin təxmin, canlı ölçmə ilə bir neçə saniyədə uyğunlaşır
         SESSIZLIK_SN = 0.7   # bu qədər davamlı sükut = nitq parçası bitdi
         MAKS_PARCA_SN = 8.0  # bir parça üçün maksimum müddət (asılı qalmasın)
 
@@ -5417,7 +5423,8 @@ class DentalApp(ctk.CTk):
                         continue
                     enerji = float(_np.sqrt(_np.mean(chunk ** 2))) if len(chunk) else 0.0
                     sn = len(chunk) / SR
-                    if enerji > ESIK:
+                    esik = max(MIN_ESIK, noise_floor * ESIK_ZERB)
+                    if enerji > esik:
                         if ilk_ses_vaxti is None:
                             ilk_ses_vaxti = time.time()
                         buffer.append(chunk)
@@ -5428,12 +5435,16 @@ class DentalApp(ctk.CTk):
                         buffer.append(chunk)
                         sessiz_say += sn
                         parca_sure += sn
-                    elif not xeberdarliq_gosterildi and ilk_ses_vaxti is None \
-                            and (time.time() - basladi_vaxti) > 20:
-                        xeberdarliq_gosterildi = True
-                        self._sesli_status_configure(
-                            t("🎤 Mikrofon səs aşkarlamır — Windows mikrofon icazələrini yoxlayın"),
-                            "#C0392B")
+                    else:
+                        # sakit dövr — ətraf səs-küy təxminini tədricən yenilə (yalnız
+                        # danışıq olmayanda, əks halda nitq öz-özünü "küy" kimi öyrədərdi)
+                        noise_floor = (1 - ESIK_EMA) * noise_floor + ESIK_EMA * enerji
+                        if not xeberdarliq_gosterildi and ilk_ses_vaxti is None \
+                                and (time.time() - basladi_vaxti) > 20:
+                            xeberdarliq_gosterildi = True
+                            self._sesli_status_configure(
+                                t("🎤 Mikrofon səs aşkarlamır — Windows mikrofon icazələrini yoxlayın"),
+                                "#C0392B")
 
                     if danisiq_basladi and (sessiz_say >= SESSIZLIK_SN or parca_sure >= MAKS_PARCA_SN):
                         audio = _np.concatenate(buffer)
