@@ -16,28 +16,31 @@ except ImportError:
     class _FSEventHandler:          # no-op stub so _XRayFileHandler can inherit
         pass
 
-ctk.set_appearance_mode("light")
+ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-# ── BlueX Futuristic Theme (mavi-beyaz) ──────────────────────────────────────
+# ── BlueX Futuristic Theme (tünd/dark) ────────────────────────────────────────
 TH = {
-    "bg":           "#EAF2FC",   # buz mavisi uygulama zemini
-    "panel":        "#FFFFFF",   # beyaz kartlar
-    "panel_soft":   "#F2F7FE",   # hafif mavi kart
-    "sidebar":      "#0B2447",   # koyu lacivert kenar çubuğu
-    "sidebar_row":  "#153B6B",   # pasif hasta satırı
-    "sidebar_sub":  "#0E2F58",   # vaka akordeon zemini
-    "sidebar_row2": "#1B4878",   # pasif vaka satırı
-    "accent":       "#2563EB",   # elektrik mavisi
+    "bg":           "#0E1420",   # tünd göy-qara uygulama zemini
+    "panel":        "#1A2233",   # slate kartlar
+    "panel_soft":   "#161D2B",   # bir az daha tünd slate kart
+    "sidebar":      "#081527",   # koyu lacivert kenar çubuğu
+    "sidebar_row":  "#102640",   # pasif hasta satırı
+    "sidebar_sub":  "#0C1E36",   # vaka akordeon zemini
+    "sidebar_row2": "#14304F",   # pasif vaka satırı
+    "accent":       "#2F7FF2",   # elektrik mavisi
     "accent_hover": "#1D4ED8",
-    "accent_soft":  "#DBEAFE",
-    "txt":          "#0F2447",   # lacivert metin
-    "txt_sub":      "#5B7398",   # mavi-gri
-    "txt_faint":    "#8AA3C5",
-    "ok":           "#0E9F6E",   # teal (onay / müalicə)
+    "accent_soft":  "#24344C",
+    "txt":          "#E8EDF5",   # açıq boz-ağ metin
+    "txt_sub":      "#8FA3C2",   # mavi-gri
+    "txt_faint":    "#5E7093",
+    "ok":           "#1BB281",   # teal (onay / müalicə)
     "ok_hover":     "#0B7A55",
-    "indigo":       "#4F46E5",
+    "indigo":       "#6366F1",
     "indigo_hover": "#4338CA",
+    "danger_bg":    "#3A1F24",   # tünd fonda "Sil" düyməsi
+    "danger_text":  "#FF8A8A",
+    "danger_hover": "#4A262C",
 }
 
 def tint(hex_color, f=0.86):
@@ -46,6 +49,10 @@ def tint(hex_color, f=0.86):
     r, g, b = (int(hex_color[i:i+2], 16) for i in (0, 2, 4))
     r = int(r + (255 - r) * f); g = int(g + (255 - g) * f); b = int(b + (255 - b) * f)
     return f"#{r:02x}{g:02x}{b:02x}"
+
+def _hex_to_rgb(hex_color):
+    hex_color = hex_color.lstrip("#")
+    return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__))
 if getattr(sys, 'frozen', False):
@@ -112,6 +119,7 @@ def _start_xray_http_server():
 
 # uygulama simgesi (exe'de PyInstaller datas ile gelir, dev'de script dizininde)
 ICON_FILE = os.path.join(getattr(sys, "_MEIPASS", SCRIPT_DIR), "app.ico")
+AVATAR_FILE = os.path.join(getattr(sys, "_MEIPASS", SCRIPT_DIR), "avatar_robot.png")
 
 # ── Ayarlar (bilgisayara özel — röntgen klasörü vb.) ─────────────────────────
 AYAR_FILE = os.path.join(os.path.dirname(DATA_FILE), "ayarlar.json")
@@ -267,6 +275,54 @@ TRANSLATIONS = {
         "en": "Note: on first activation the recognition model (~500MB) is downloaded once from the internet, after which it runs fully locally (offline). The microphone is listened to continuously, but no audio is ever sent to the cloud — each clip is processed locally and discarded immediately.",
         "ru": "Примечание: при первой активации модель распознавания (~500МБ) скачивается один раз из интернета, после чего работает полностью локально (офлайн). Микрофон слушается постоянно, но ни один звук не отправляется в облако — каждый фрагмент обрабатывается локально и сразу удаляется.",
         "tr": "Not: ilk etkinleştirmede tanıma modeli (~500MB) internetten bir kez indirilir, sonra tamamen yerel (çevrimdışı) çalışır. Mikrofon sürekli dinlenir, ancak hiçbir ses buluta gönderilmez — her parça yalnızca yerel olarak işlenip hemen atılır."},
+    "ANTHROPIC API AÇARI (İSTƏYƏ BAĞLI)": {
+        "en": "ANTHROPIC API KEY (OPTIONAL)",
+        "ru": "КЛЮЧ API ANTHROPIC (НЕОБЯЗАТЕЛЬНО)",
+        "tr": "ANTHROPIC API ANAHTARI (İSTEĞE BAĞLI)"},
+    "Daxil etsəniz, əmrin mənasını yerli qaydalar əvəzinə Claude AI (Anthropic) təhlil edəcək — daha çevik, amma mətn (yalnız tanınan söz, SƏS/şəkil YOX) internetə göndərilir və öz hesabınızdan ödənilir. Boş qalsa, hər şey əvvəlki kimi tam yerli (offline) işləyir.": {
+        "en": "If you provide one, Claude AI (Anthropic) will analyze the command's meaning instead of the local rules — more flexible, but the text (only the recognized words, NOT audio/images) is sent over the internet and billed to your own account. Leave it empty and everything works fully locally (offline) as before.",
+        "ru": "Если указать ключ, смысл команды будет анализировать Claude AI (Anthropic) вместо локальных правил — более гибко, но текст (только распознанные слова, НЕ аудио/изображения) отправляется в интернет и оплачивается с вашего собственного счёта. Оставьте поле пустым, и всё будет работать полностью локально (офлайн), как раньше.",
+        "tr": "Girerseniz, komutun anlamını yerel kurallar yerine Claude AI (Anthropic) analiz edecek — daha esnek, ancak metin (yalnızca tanınan kelimeler, SES/görüntü DEĞİL) internete gönderilir ve kendi hesabınızdan faturalandırılır. Boş bırakırsanız her şey eskisi gibi tamamen yerel (çevrimdışı) çalışır."},
+    "ÜMUMİ AI SÖHBƏTİ (PUSH-TO-TALK)": {
+        "en": "GENERAL AI CHAT (PUSH-TO-TALK)",
+        "ru": "ОБЩИЙ ЧАТ С AI (PUSH-TO-TALK)",
+        "tr": "GENEL AI SOHBETİ (PUSH-TO-TALK)"},
+    "Düyməni basılı saxlayıb danışın — tanınan mətn Claude-a adi söhbət mesajı kimi göndərilir (yuxarıdaki Anthropic açarı tələb olunur), cavab həm yazılı, həm səslə (internet lazımdır) gəlir. Dental əmr tanınarsa, icra ETMƏZDƏN ƏVVƏL təsdiq istənir.": {
+        "en": "Hold the key down and speak — the recognized text is sent to Claude as an ordinary chat message (requires the Anthropic key above); the reply comes back both as text and speech (needs internet). If a dental command is recognized, you are asked to confirm it BEFORE it is applied.",
+        "ru": "Удерживайте клавишу и говорите — распознанный текст отправляется Claude как обычное сообщение в чате (требуется ключ Anthropic выше), ответ приходит и текстом, и голосом (нужен интернет). Если распознана стоматологическая команда, перед выполнением запрашивается подтверждение.",
+        "tr": "Tuşu basılı tutup konuşun — tanınan metin Claude'a sıradan bir sohbet mesajı olarak gönderilir (yukarıdaki Anthropic anahtarı gerekir), yanıt hem yazılı hem sesli (internet gerekir) gelir. Dental bir komut tanınırsa, uygulanmadan ÖNCE onay istenir."},
+    "Ümumi AI söhbətini aktivləşdir": {
+        "en": "Enable general AI chat",
+        "ru": "Включить общий чат с AI",
+        "tr": "Genel AI sohbetini etkinleştir"},
+    "DÜYMƏ (PUSH-TO-TALK)": {"en": "KEY (PUSH-TO-TALK)", "ru": "КЛАВИША (PUSH-TO-TALK)", "tr": "TUŞ (PUSH-TO-TALK)"},
+    "SƏS (TTS)": {"en": "VOICE (TTS)", "ru": "ГОЛОС (TTS)", "tr": "SES (TTS)"},
+    "AI Söhbət": {"en": "AI Chat", "ru": "Чат с AI", "tr": "AI Sohbet"},
+    "Əvvəlcə yuxarıda Anthropic API açarını daxil edin.": {
+        "en": "Please enter the Anthropic API key above first.",
+        "ru": "Сначала введите ключ API Anthropic выше.",
+        "tr": "Önce yukarıya Anthropic API anahtarını girin."},
+    "Hazır": {"en": "Ready", "ru": "Готово", "tr": "Hazır"},
+    "basılı saxla, danışın": {
+        "en": "hold down and speak", "ru": "удерживайте и говорите", "tr": "basılı tutup konuşun"},
+    "🎤 Dinləyirəm…": {"en": "🎤 Listening…", "ru": "🎤 Слушаю…", "tr": "🎤 Dinliyorum…"},
+    "Mikrofon xətası": {"en": "Microphone error", "ru": "Ошибка микрофона", "tr": "Mikrofon hatası"},
+    "⏳ Fikirləşirəm…": {"en": "⏳ Thinking…", "ru": "⏳ Думаю…", "tr": "⏳ Düşünüyorum…"},
+    "🔊 Danışır…": {"en": "🔊 Speaking…", "ru": "🔊 Говорит…", "tr": "🔊 Konuşuyor…"},
+    "Anthropic API açarı Ayarlar-da daxil edilməyib.": {
+        "en": "No Anthropic API key has been entered in Settings.",
+        "ru": "В настройках не указан ключ API Anthropic.",
+        "tr": "Ayarlar'da Anthropic API anahtarı girilmemiş."},
+    "Claude-a qoşulmaq alınmadı.": {
+        "en": "Could not connect to Claude.", "ru": "Не удалось подключиться к Claude.",
+        "tr": "Claude'a bağlanılamadı."},
+    "(bəli/xeyr?)": {"en": "(yes/no?)", "ru": "(да/нет?)", "tr": "(evet/hayır?)"},
+    "əməliyyat təklif edildi": {
+        "en": "action proposed", "ru": "предложено действие", "tr": "işlem önerildi"},
+    "Başa düşmədim, bir daha deyə bilərsiniz?": {
+        "en": "I didn't understand, could you say that again?",
+        "ru": "Я не поняла, можете повторить?",
+        "tr": "Anlayamadım, tekrar söyler misiniz?"},
     "Əvvəlcə pasient seçin.": {"en": "Please select a patient first.", "ru": "Сначала выберите пациента.", "tr": "Önce bir hasta seçin."},
     "İmtina": {"en": "Cancel", "ru": "Отмена", "tr": "İptal"},
     "Səsli əmrlə əlavə edildi": {"en": "Added via voice command", "ru": "Добавлено голосовой командой", "tr": "Sesli komutla eklendi"},
@@ -418,6 +474,32 @@ def sesli_asistent_aktiv():
 def sesli_oyadici_soz():
     return (AYARLAR.get("sesli_oyadici_soz") or "bulex").strip().lower()
 
+def chat_asistent_aktiv():
+    return bool(AYARLAR.get("chat_asistent_aktiv", False))
+
+def chat_hotkey():
+    return (AYARLAR.get("chat_hotkey") or "f9").strip().lower()
+
+def tts_ses_adi():
+    return AYARLAR.get("tts_ses") or "az-AZ-BabekNeural"
+
+_TESDIQ_SOZLERI = {"beli", "ha", "yaz", "elave et", "tesdiq", "oldu", "bas"}
+_LEGV_SOZLERI = {"xeyr", "yox", "legv", "legv et", "imtina", "dayan", "stop"}
+
+def _chat_tesdiq_xeyr_yoxla(text):
+    """Çat rejimində gözlənilən təsdiq/ləğv cavabını (bəli/hə/yaz vs
+    xeyr/yox/ləğv) sərbəst danışılan mətndən tapır. `_az_sade()` ilə
+    diakritiklər təmizləndikdən sonra söz-sərhədli axtarış aparır (sadə
+    "in" yoxlaması "yazmayın" kimi sözlərdə yanlış uyğunluq verər)."""
+    norm = f" {_az_sade(text or '')} "
+    for soz in _LEGV_SOZLERI:
+        if f" {soz} " in norm:
+            return "legv"
+    for soz in _TESDIQ_SOZLERI:
+        if f" {soz} " in norm:
+            return "tesdiq"
+    return None
+
 try:
     import pydicom as _pydicom
     _DCM_OK = True
@@ -448,6 +530,73 @@ def dcm_to_png(path):
     except Exception as e:
         print(f"[XRay] DICOM çevrilemedi ({os.path.basename(path)}): {e}")
         return None
+
+try:
+    import rawpy as _rawpy
+    _RAW_OK = True
+except Exception:
+    _RAW_OK = False
+
+# Canon (.cr2/.cr3), Nikon (.nef/.nrw) və rawpy/LibRaw-ın dəstəklədiyi digər RAW
+# formatları (.arw, .dng, .orf, .raf, .rw2 və s.) — foto aparatlarından birbaşa
+# gələn kartlardakı fayllar.
+RAW_UZANTILAR = (".cr2", ".cr3", ".nef", ".nrw", ".arw", ".dng", ".orf", ".raf", ".rw2") if _RAW_OK else ()
+XRAY_UZANTILAR = XRAY_UZANTILAR + RAW_UZANTILAR
+
+def raw_oxu(path):
+    """RAW foto faylını (Canon/Nikon və s.) PIL Image-ə çevirir (xəta→None)."""
+    if not _RAW_OK:
+        return None
+    try:
+        with _rawpy.imread(path) as raw:
+            arr = raw.postprocess(use_camera_wb=True, no_auto_bright=False, output_bps=8)
+        return Image.fromarray(arr)
+    except Exception as e:
+        print(f"[Foto] RAW çevrilemedi ({os.path.basename(path)}): {e}")
+        return None
+
+def sekli_ac(path):
+    """Yol istənilən dəstəklənən formatda ola bilər (adi şəkil, DICOM, ya da
+    Canon/Nikon RAW) — hamısını PIL Image olaraq açır (xəta→None)."""
+    ext = os.path.splitext(path)[1].lower()
+    if ext == ".dcm":
+        png = dcm_to_png(path)
+        return Image.open(png) if png else None
+    if ext in RAW_UZANTILAR:
+        return raw_oxu(path)
+    try:
+        return Image.open(path)
+    except Exception as e:
+        print(f"[Foto] şəkil açılmadı ({os.path.basename(path)}): {e}")
+        return None
+
+def raw_cache_hazirla(path):
+    """RAW foto faylını sıxışdırılmış JPEG olaraq keşə salır; yol qaytarır (xəta→None)."""
+    img = raw_oxu(path)
+    if img is None:
+        return None
+    try:
+        out_dir = os.path.join(os.path.dirname(DATA_FILE), "raw_cache")
+        os.makedirs(out_dir, exist_ok=True)
+        out = os.path.join(out_dir, os.path.splitext(os.path.basename(path))[0] + ".jpg")
+        with open(out, "wb") as f:
+            f.write(sekli_sixisdir(img))
+        return out
+    except Exception as e:
+        print(f"[Foto] RAW keşlənmədi ({os.path.basename(path)}): {e}")
+        return None
+
+def sekli_sixisdir(img, max_boyut=1600, keyfiyyet=82):
+    """Böyük foto aparatı şəkillərini (RAW və ya adi JPEG/PNG) proqram daxilində
+    saxlamaq/buluda göndərmək üçün ağlabatan ölçüyə sıxışdırır — JPEG bytes qaytarır."""
+    img = img.convert("RGB")
+    w, h = img.size
+    if max(w, h) > max_boyut:
+        f = max_boyut / max(w, h)
+        img = img.resize((max(1, int(w * f)), max(1, int(h * f))), Image.LANCZOS)
+    buf = BytesIO()
+    img.save(buf, format="JPEG", quality=keyfiyyet, optimize=True)
+    return buf.getvalue()
 
 # ── BULUD SENKRONİZASYONU (Supabase) ─────────────────────────────────────────
 # Bu iki değer klinik geneli tek Supabase projesine aittir (hasta-verisi
@@ -531,6 +680,39 @@ def _sb_http(method, path, body=None, token=None, extra_headers=None, timeout=No
         raise
     finally:
         socket.setdefaulttimeout(prev_timeout)
+
+def _sb_http_raw(method, path, data=None, token=None, content_type=None, timeout=60):
+    """`_sb_http` ilə eyni (apikey/Authorization/timeout/SSL fix), amma JSON
+    encode/decode ETMİR — Storage-dən şəkil bayt oxumaq/yazmaq üçün (gövdə
+    artıq xam bayt, cavab da xam bayt kimi qaytarılır)."""
+    import urllib.request, urllib.error, socket
+    url = SUPABASE_URL.rstrip("/") + path
+    headers = {"apikey": SUPABASE_ANON_KEY, "Authorization": f"Bearer {token or SUPABASE_ANON_KEY}"}
+    if content_type:
+        headers["Content-Type"] = content_type
+    if data is not None:
+        headers["x-upsert"] = "true"
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    prev_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(timeout)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout, context=ssl_baglam()) as resp:
+            return resp.read()
+    except urllib.error.HTTPError as e:
+        msg = e.read().decode("utf-8", "ignore")
+        raise RuntimeError(f"HTTP {e.code}: {msg[:300]}")
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"Bağlantı xətası: {e.reason}")
+    except socket.timeout:
+        raise RuntimeError("Bağlantı xətası: vaxt bitdi (timeout)")
+    finally:
+        socket.setdefaulttimeout(prev_timeout)
+
+_IMG_CACHE_DIR = os.path.join(os.path.dirname(DATA_FILE), "cache_img")
+
+def _img_cache_path(storage_path):
+    os.makedirs(_IMG_CACHE_DIR, exist_ok=True)
+    return os.path.join(_IMG_CACHE_DIR, storage_path.replace("/", "_"))
 
 def sb_signup(email, password):
     return _sb_http("POST", "/auth/v1/signup", {"email": email, "password": password})
@@ -714,11 +896,17 @@ class _XRayFileHandler(_FSEventHandler):
                 time.sleep(0.3)
         except OSError:
             return
-        if path.lower().endswith(".dcm"):
+        ext = path.lower()
+        if ext.endswith(".dcm"):
             png = dcm_to_png(path)
             if not png:
                 return
             path_out = png
+        elif ext.endswith(RAW_UZANTILAR):
+            cached = raw_cache_hazirla(path)
+            if not cached:
+                return
+            path_out = cached
         else:
             path_out = path
         self._seen.add(path)
@@ -810,6 +998,16 @@ _SESLI_TAB_TIDLER = {"plan": _SESLI_TEDAVI_TIDLER_PLAN, "ilkin": _SESLI_TEDAVI_T
 _SESLI_TEDAVI_ETIKET_ALL = {tid: lbl for tid, lbl, _ in TEDAVILER}
 _SESLI_TAB_ETIKET = {"plan": "Plan", "ilkin": "İlkin Vəziyyət", "tedavi": "Müalicə"}
 _SESLI_TAB_METOD = {"plan": "_uygula_plan", "ilkin": "_uygula_ilkin", "tedavi": "_uygula_tedavi"}
+
+def _netice_qisa_metn(netice):
+    """Təsdiq dialoqu açılmazdan əvvəl avatar qabarcığında göstərilən qısa
+    xülasə (səsli deyil, yalnız mətn)."""
+    if netice["niyyet"] == "randevu":
+        return f"{netice['xeste_adi']}: {netice['tarix']} {netice['saat']} — təsdiq lazımdır"
+    dis = ", ".join(str(n) for n in netice["dis_nolari"])
+    lbl = _SESLI_TEDAVI_ETIKET_ALL.get(netice["tid"], netice["tid"])
+    tab_lbl = _SESLI_TAB_ETIKET.get(netice["tab"], netice["tab"])
+    return f"Diş {dis} → {lbl} [{tab_lbl}] — təsdiq lazımdır"
 
 _DIS_GECERLI = set(UST + ALT)
 
@@ -1003,22 +1201,322 @@ def parse_sesli_emr(text, hastalar, aktif_hasta_adi=None):
         }
     return None
 
+ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
+ANTHROPIC_MODEL = "claude-haiku-5-5"
+
+_CLAUDE_TOOL = {
+    "name": "sesli_emr_qeydi",
+    "description": "Azərbaycan dilində stomatoloji səsli əmrdən çıxarılan struktur məlumat.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "niyyet": {"type": "string", "enum": ["plan", "randevu", "anlasilmadi"],
+                       "description": "'plan' = diş/müalicə əmri, 'randevu' = görüş təyini, "
+                                       "'anlasilmadi' = məna çıxarıla bilmədi"},
+            "tab": {"type": "string", "enum": ["plan", "ilkin", "tedavi"],
+                    "description": "niyyet='plan' olanda: 'plan'=ediləcək iş (defolt), "
+                                    "'ilkin'=hazırkı/ilkin vəziyyət (çürük/kök qalığı DAXİL), "
+                                    "'tedavi'=artıq edilmiş iş (tarixçə)"},
+            "dis_nolari": {"type": "array", "items": {"type": "integer"},
+                           "description": "FDI diş nömrələri (11-18,21-28,31-38,41-48)"},
+            "tid": {"type": "string",
+                    "enum": ["saglikli", "cekim", "kanal", "dolgu", "kron", "implant",
+                              "eksik", "gozlem", "curuk", "kok"],
+                    "description": "'curuk'/'kok' YALNIZ tab='ilkin' olanda etibarlıdır"},
+            "xeste_adi": {"type": ["string", "null"],
+                          "description": "mətndə '<ad> üçün' DEYİLİBSƏ o ad; yoxdursa null "
+                                          "(aktiv pasientə düşəcək)"},
+            "yeni_pasient": {"type": "boolean",
+                              "description": "xeste_adi verilən MÖVCUD pasientlər siyahısında "
+                                              "yoxdursa true"},
+            "tarix": {"type": ["string", "null"], "description": "ISO YYYY-MM-DD (randevu üçün)"},
+            "saat": {"type": ["string", "null"], "description": "HH:MM (randevu üçün)"},
+        },
+        "required": ["niyyet"],
+    },
+}
+
+def _claude_parse_emr(text, hastalar, aktif_hasta_adi, api_key):
+    """Whisper-dən gələn mətni Anthropic Claude API-sinə (Haiku 5.5) göndərib
+    struktur əmr çıxarır — yerli regex/sinonim sisteminə (parse_sesli_emr)
+    ALTERNATİV, daha çevik təhlil üçün. İstifadəçi öz API açarını Ayarlar-da
+    daxil etdikdə işə düşür; şəbəkə/açar xətasında None qaytarır ki, çağıran
+    tərəf yerli təhlilə geri qaytsın (offline fallback həmişə qalır)."""
+    if not api_key or not text or not text.strip():
+        return None
+    import urllib.request, urllib.error, socket
+    adlar = sorted({h.get("ad", "") for h in hastalar.values() if h.get("ad")})
+    indi = datetime.now()
+    sistem = (
+        "Sən stomatoloji proqram üçün səsli əmrləri təhlil edən köməkçisən. "
+        f"Bugünkü tarix: {indi.strftime('%Y-%m-%d')}. "
+        "Mövcud pasient adları: " + (", ".join(adlar) if adlar else "(siyahı boşdur)") + ". "
+        "Mətndə ad '<Ad> üçün' kimi aydın deyilməyibsə xeste_adi-ni null saxla. "
+        "Diş nömrələri yalnız 11-18,21-28,31-38,41-48 ola bilər. "
+        "VACİB: niyyet='plan' olanda tid VƏ dis_nolari sahələri HƏMİŞƏ doldurulmalıdır "
+        "(heç vaxt boş qoyma) — tid mətndə deyilən müalicə/vəziyyətin kodu olmalıdır. "
+        "Əmrin mənası çıxarıla bilmirsə niyyet='anlasilmadi' qaytar."
+    )
+    body = {
+        "model": ANTHROPIC_MODEL,
+        "max_tokens": 512,
+        "system": sistem,
+        "tools": [_CLAUDE_TOOL],
+        "tool_choice": {"type": "tool", "name": "sesli_emr_qeydi"},
+        "messages": [{"role": "user", "content": text}],
+    }
+    data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(
+        ANTHROPIC_API_URL, data=data, method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "x-api-key": api_key,
+            "anthropic-version": "2026-10-21",
+        },
+    )
+    prev_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(20)
+    try:
+        with urllib.request.urlopen(req, timeout=20, context=ssl_baglam()) as resp:
+            res = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"Claude API HTTP {e.code}: {e.read().decode('utf-8','ignore')[:200]}")
+    finally:
+        socket.setdefaulttimeout(prev_timeout)
+
+    tool_block = next((b for b in res.get("content", []) if b.get("type") == "tool_use"), None)
+    if not tool_block:
+        return None
+    return _claude_tool_girisini_neticeye_cevir(tool_block.get("input", {}), hastalar, aktif_hasta_adi, indi)
+
+def _claude_tool_girisini_neticeye_cevir(r, hastalar, aktif_hasta_adi, indi):
+    """`_CLAUDE_TOOL` sxemi ilə Claude-un qaytardığı xam `input` dict-ini
+    (`_claude_parse_emr` VƏ ümumi söhbət rejimindəki `_claude_chat_cavab`
+    arasında ORTAQ) yoxlanmış `netice` dict-inə çevirir, ya da keçərsiz
+    olduqda `None` qaytarır. Claude-un nəticəsinə kor-koranə etibar edilmir —
+    dis_nolari/tid/xeste_adi/yeni_pasient həmişə YERLİ qaydalara qarşı
+    yoxlanılır (xüsusən yeni pasient yaratma/randevu kimi real-data təsirli
+    əməllər üçün)."""
+    niyyet = r.get("niyyet")
+    if niyyet not in ("plan", "randevu"):
+        return None
+    adlar = sorted({h.get("ad", "") for h in hastalar.values() if h.get("ad")})
+
+    xeste_adi = r.get("xeste_adi") or None
+    yeni_pasient = bool(r.get("yeni_pasient")) if xeste_adi else False
+    if xeste_adi and xeste_adi in adlar:
+        yeni_pasient = False
+
+    if niyyet == "randevu":
+        xeste_adi = xeste_adi or aktif_hasta_adi
+        if not xeste_adi:
+            return None
+        tarix = r.get("tarix")
+        try:
+            datetime.strptime(tarix, "%Y-%m-%d")
+        except Exception:
+            tarix = indi.date().isoformat()
+        saat = r.get("saat")
+        if not saat or not re.match(r"^\d{2}:\d{2}$", saat):
+            saat = "09:00"
+        return {"niyyet": "randevu", "xeste_adi": xeste_adi, "yeni_pasient": yeni_pasient,
+                "tarix": tarix, "saat": saat}
+
+    tab = r.get("tab") if r.get("tab") in _SESLI_TAB_TIDLER else "plan"
+    tid = r.get("tid")
+    if tid not in _SESLI_TAB_TIDLER[tab]:
+        return None
+    dis_nolari = [n for n in (r.get("dis_nolari") or []) if n in _DIS_GECERLI]
+    if not dis_nolari:
+        return None
+    return {"niyyet": "plan", "tab": tab, "dis_nolari": dis_nolari, "tid": tid,
+            "xeste_adi": xeste_adi, "yeni_pasient": yeni_pasient}
+
+_CHAT_SISTEM_PROMPT_SABLON = (
+    "Sən stomatoloji klinikanın proqramında işləyən AI köməkçisən, səsli söhbət "
+    "rejimindəsən (cavabın ucadan səsləndirilir). Bugünkü tarix: {tarix}. "
+    "Mövcud pasient adları: {adlar}. Hazırkı aktiv pasient: {aktif}. "
+    "QAYDALAR: cavabların 1-2 qısa cümlə olsun, heç vaxt siyahı/markdown/* "
+    "işlətmə, rəqəmləri sözlə yaz (məsələn '16' yerinə 'on altı'). "
+    "İstifadəçi aydın şəkildə dental əməliyyat (diş/müalicə qeydi və ya randevu) "
+    "İSTƏDİKDƏ 'sesli_emr_qeydi' alətini çağır — əks halda sadəcə söhbət et, "
+    "sual-cavab ver, alət çağırma. "
+    "VACİB: alət çağırarkən niyyet='plan' olanda tid VƏ dis_nolari sahələri "
+    "HƏMİŞƏ doldurulmalıdır (heç vaxt boş qoyma) — tid mətndə deyilən "
+    "müalicə/vəziyyətin kodu olmalıdır."
+)
+
+def _claude_chat_cavab(mesaj, hastalar, aktif_hasta_adi, api_key, tarixce):
+    """Ümumi (push-to-talk) söhbət rejimi üçün Claude-a sorğu göndərir.
+    `_claude_parse_emr`-dən fərqli olaraq `tool_choice` MƏCBURİ deyil — Claude
+    ya sadə mətnlə cavablandırır (ümumi söhbət), ya da aydın dental əmr
+    eşitdikdə `_CLAUDE_TOOL`-u çağırır. Qaytarır: `("text", metn)` və ya
+    `("tool", netice)`; netice keçərsiz olarsa `("text", fallback_metn)`."""
+    import urllib.request, urllib.error, socket
+    indi = datetime.now()
+    adlar = sorted({h.get("ad", "") for h in hastalar.values() if h.get("ad")})
+    sistem = _CHAT_SISTEM_PROMPT_SABLON.format(
+        tarix=indi.strftime("%Y-%m-%d"),
+        adlar=(", ".join(adlar) if adlar else "(siyahı boşdur)"),
+        aktif=(aktif_hasta_adi or "(seçilməyib)"),
+    )
+    messages = list(tarixce) + [{"role": "user", "content": mesaj}]
+    body = {
+        "model": ANTHROPIC_MODEL,
+        # 400 token-lıq ilkin limit real sınaqda arabir qırılmağa səbəb oldu —
+        # bu model tool_choice MƏCBURİ olmayanda bəzən "thinking" blokuna da
+        # xeyli token sərf edir, nəticədə alət-çağırışının input-u yarımçıq
+        # kəsilirdi (məs. dis_nolari/tid boş qalırdı).
+        "max_tokens": 1024,
+        "system": sistem,
+        "tools": [_CLAUDE_TOOL],
+        "messages": messages,
+    }
+    data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(
+        ANTHROPIC_API_URL, data=data, method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "x-api-key": api_key,
+            "anthropic-version": "2026-10-21",
+        },
+    )
+    prev_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(25)
+    try:
+        with urllib.request.urlopen(req, timeout=25, context=ssl_baglam()) as resp:
+            res = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"Claude API HTTP {e.code}: {e.read().decode('utf-8','ignore')[:200]}")
+    finally:
+        socket.setdefaulttimeout(prev_timeout)
+
+    tool_block = next((b for b in res.get("content", []) if b.get("type") == "tool_use"), None)
+    if tool_block:
+        netice = _claude_tool_girisini_neticeye_cevir(tool_block.get("input", {}), hastalar, aktif_hasta_adi, indi)
+        if netice:
+            return ("tool", netice)
+    metin = " ".join(b.get("text", "") for b in res.get("content", []) if b.get("type") == "text").strip()
+    return ("text", metin or t("Başa düşmədim, bir daha deyə bilərsiniz?"))
+
+_TTS_MIXER_HAZIR = {"ok": False}
+
+def _tts_de(metin, dayandir_event=None):
+    """Mətni edge-tts ilə (bulud, internet lazımdır) səsləndirib pygame.mixer
+    ilə çalır. Bütün gövdə qəsdən try/except-ə bükülüb: internet/xəta olsa
+    SƏSSİZCƏ keçilir (mətn artıq çat pəncərəsində göstərilib — bu, offline
+    fallback-ın yeganə forması). `dayandir_event` set olunarsa (yeni
+    push-to-talk başladığında) çalma dərhal kəsilir."""
+    try:
+        import asyncio, tempfile, edge_tts, pygame
+        voice = tts_ses_adi()
+
+        async def _yarat(path):
+            comm = edge_tts.Communicate(metin, voice)
+            await comm.save(path)
+
+        fd, path = tempfile.mkstemp(suffix=".mp3", prefix="bluex_tts_")
+        os.close(fd)
+        try:
+            asyncio.run(_yarat(path))
+            if not _TTS_MIXER_HAZIR["ok"]:
+                pygame.mixer.init()
+                _TTS_MIXER_HAZIR["ok"] = True
+            pygame.mixer.music.load(path)
+            pygame.mixer.music.play()
+            while pygame.mixer.music.get_busy():
+                if dayandir_event is not None and dayandir_event.is_set():
+                    pygame.mixer.music.stop()
+                    break
+                time.sleep(0.1)
+        finally:
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"[TTS] səsləndirilmədi (internet/xəta?): {e}")
+
+# ── SƏSLİ ASİSTENT AVATARI — yarı-həkim/yarı-robot üz (PIL ilə çəkilir, keşlənir) ──
+_SESLI_AVATAR_CACHE = {}
+_AVATAR_RENK = {"idle": (140, 140, 145), "listening": (46, 204, 113), "danisir": (52, 152, 219)}
+
+def _sesli_avatar_uz():
+    """İstifadəçinin öz şəklini (`avatar_robot.png` — ağ fonu şəffaflaşdırılmış,
+    kənarları kəsilmiş robot-həkim stiker) bir dəfə yükləyib uyğun ölçüyə
+    gətirir və keşləyir."""
+    if "uz" in _SESLI_AVATAR_CACHE:
+        return _SESLI_AVATAR_CACHE["uz"]
+    img = Image.open(AVATAR_FILE).convert("RGBA")
+    hedef_h = 190
+    oran = hedef_h / img.height
+    img = img.resize((max(1, int(img.width * oran)), hedef_h), Image.LANCZOS)
+    _SESLI_AVATAR_CACHE["uz"] = img
+    return img
+
+def _sesli_avatar_halqali(renk, parlaqliq=1.0, pad=22):
+    """Üz şəklinin ətrafına rəngli (hal göstərən) dairəvi-küncli çərçivə əlavə
+    edir — nəbz animasiyası üçün hər çağırışda yeni tərkib (üz özü keşlənib,
+    ucuz əməliyyatdır)."""
+    uz = _sesli_avatar_uz()
+    Sw, Sh = uz.width + pad * 2, uz.height + pad * 2
+    out = Image.new("RGBA", (Sw, Sh), (0, 0, 0, 0))
+    d = ImageDraw.Draw(out)
+    alpha = max(60, min(255, int(255 * parlaqliq)))
+    d.rounded_rectangle([4, 4, Sw - 4, Sh - 4], radius=28, outline=tuple(renk) + (alpha,), width=7)
+    out.alpha_composite(uz, (pad, pad))
+    return out
+
 _WHISPER_MODEL_CACHE = {}
 
 def _whisper_model_dir():
     return os.path.join(os.path.dirname(DATA_FILE), "whisper_models")
 
+def _whisper_cihaz_sec():
+    """CUDA mövcuddursa daha dəqiq 'medium'+float16 modelini GPU-da, yoxdursa
+    'small'+int8 modelini CPU-da seçir. ctranslate2 import/sorğu xətası
+    (CUDA DLL-ləri yoxdur və s.) həmişə CPU-ya təhlükəsiz geri qayıdışdır."""
+    try:
+        import ctranslate2
+        if ctranslate2.get_cuda_device_count() > 0:
+            return "medium", "cuda", "float16"
+    except Exception:
+        pass
+    return "small", "cpu", "int8"
+
 def _whisper_model_yukle():
     """Whisper modelini bir dəfə yükləyib keşləyir (çağırışlar arası təkrar
     yüklənmir). İlk çağırışda model yerli keşdə yoxdursa internetdən endirilir
-    (bir dəfəlik, ~500MB) — bu funksiya arxa-plan thread-dən çağırılmalıdır,
-    UI thread-ini bloklamasın deyə."""
+    (bir dəfəlik, ölçü GPU/CPU seçiminə görə dəyişir) — bu funksiya arxa-plan
+    thread-dən çağırılmalıdır, UI thread-ini bloklamasın deyə."""
     if "model" not in _WHISPER_MODEL_CACHE:
         from faster_whisper import WhisperModel
         kesh_dir = _whisper_model_dir()
         os.makedirs(kesh_dir, exist_ok=True)
-        _WHISPER_MODEL_CACHE["model"] = WhisperModel(
-            "small", device="cpu", compute_type="int8", download_root=kesh_dir)
+        olcu, cihaz, hesab_novu = _whisper_cihaz_sec()
+        model = None
+        if cihaz == "cuda":
+            try:
+                model = WhisperModel(olcu, device=cihaz, compute_type=hesab_novu, download_root=kesh_dir)
+                # `ctranslate2.get_cuda_device_count()` kart/sürücünü görsə də, HƏQİQİ
+                # inference üçün lazım olan runtime DLL-ləri (cuBLAS/cuDNN) çatışmaya
+                # bilər — bu xəta yalnız transkripsiya ZAMANI üzə çıxır, konstruktor
+                # zamanı yox. Ona görə kiçik (1 saniyəlik sükut) sınaq transkripsiya
+                # ilə əvvəlcədən doğrulanır; uğursuz olsa təhlükəsiz CPU-ya keçilir.
+                import numpy as _np_sinaq_mod
+                list(model.transcribe(_np_sinaq_mod.zeros(16000, dtype="float32"), language="az")[0])
+            except Exception as e:
+                print(f"[Whisper] CUDA runtime işləmədi, CPU-ya keçilir: {e}")
+                model = None
+        if model is None:
+            try:
+                model = WhisperModel(olcu if cihaz != "cuda" else "small",
+                                      device="cpu", compute_type="int8" if cihaz == "cuda" else hesab_novu,
+                                      download_root=kesh_dir)
+            except Exception as e:
+                print(f"[Whisper] CPU ilə də yüklənmədi: {e}")
+                raise
+        _WHISPER_MODEL_CACHE["model"] = model
     return _WHISPER_MODEL_CACHE["model"]
 
 # Her tedavinin hangi katmana uygulandığı
@@ -1328,8 +1826,8 @@ MAP_W, MAP_H = int(500 * M_SCALE), int(364 * M_SCALE)   # ArchCanvas ekran boyut
 _MS  = 2                     # tam sahne süperörnekleme
 _MTS = 4                     # diş tile iç süperörnekleme (96x240 mantıksal → x4)
 
-M_BG     = (11, 36, 71)      # kenar çubuğu laciverti (#0B2447)
-M_PANEL  = (21, 59, 107)     # çip zemini (#153B6B)
+M_BG     = _hex_to_rgb(TH["panel"])       # xəritə kartının fonu (TH ilə eyni)
+M_PANEL  = _hex_to_rgb(TH["panel_soft"])  # çip zemini (TH ilə eyni)
 M_IVORY  = (240, 237, 228)
 M_ROOT   = (228, 216, 178)
 M_EDGE   = (128, 118, 100)
@@ -1652,8 +2150,8 @@ def _m_base_img():
     global _map_base
     if _map_base is None:
         W, H = MAP_W * _MS, MAP_H * _MS
-        # açık uygulama zemini üstünde yuvarlak köşeli koyu kart
-        img = Image.new("RGB", (W, H), (234, 242, 252))
+        # uygulama zemini üstünde yuvarlak köşeli kart
+        img = Image.new("RGB", (W, H), _hex_to_rgb(TH["bg"]))
         card = Image.new("L", (W, H), 0)
         ImageDraw.Draw(card).rounded_rectangle((0, 0, W - 1, H - 1),
                                                radius=int(14 * M_SCALE * _MS), fill=255)
@@ -2111,6 +2609,18 @@ class DentalApp(ctk.CTk):
         if sesli_asistent_aktiv():
             self.after(2000, self._sesli_baslat)
 
+        # ── Ümumi AI Söhbəti (push-to-talk, F9) — wake-word sistemindən MÜSTƏQİL ──
+        self._chat_win = None
+        self._chat_hotkey_qeydli = None
+        self._chat_ptt_aktiv = False
+        self._chat_ptt_stream = None
+        self._chat_ptt_buffer = []
+        self._chat_tarixce = []
+        self._chat_pending_confirm = None
+        self._tts_stop_event = threading.Event()
+        if chat_asistent_aktiv() and (AYARLAR.get("anthropic_api_key") or "").strip():
+            self.after(2200, self._chat_baslat)
+
         # ── Randevu vaxtı çatanda "gəldi" təsdiqi (2 dəqiqə cavabsız qalsa avtomatik) ──
         self._randevu_prompted = set()
         self.after(15000, self._randevu_tick)
@@ -2330,6 +2840,16 @@ class DentalApp(ctk.CTk):
         self._tbar(content, 0, tab="tedavi")
         arch_f=ctk.CTkFrame(content,fg_color="transparent")
         arch_f.grid(row=1,column=0,sticky="nsew")
+
+        timeline_f=ctk.CTkFrame(content,fg_color=TH["panel"],corner_radius=12,height=128)
+        timeline_f.grid(row=2,column=0,sticky="ew",pady=(6,0))
+        timeline_f.grid_propagate(False)
+        timeline_f.grid_columnconfigure(0,weight=1); timeline_f.grid_rowconfigure(1,weight=1)
+        ctk.CTkLabel(timeline_f,text=t("MÜALİCƏ ZAMAN XƏTTİ"),
+                     font=ctk.CTkFont(size=11,weight="bold"),
+                     text_color=TH["accent"]).grid(row=0,column=0,sticky="w",padx=14,pady=(6,0))
+        self.muayine_xetti=ctk.CTkFrame(timeline_f,fg_color="transparent")
+        self.muayine_xetti.grid(row=1,column=0,sticky="nsew",padx=6,pady=(0,4))
         self.arch1=ArchCanvas(arch_f,self._tikla1,on_range=self._tikla1_range)
         self.arch1.pack(side="left",anchor="n",padx=10,pady=8)
 
@@ -2426,7 +2946,7 @@ class DentalApp(ctk.CTk):
         notlar=h.get("notlar_liste",[])
         if isinstance(notlar,str): notlar=[{"tarih":"","baslik":"Qeyd","metin":notlar}]
         for i,not_ in enumerate(reversed(notlar)):
-            kart=ctk.CTkFrame(self.not_scroll,fg_color="white",
+            kart=ctk.CTkFrame(self.not_scroll,fg_color=TH["panel"],
                                corner_radius=8)
             kart.pack(fill="x",padx=4,pady=4)
             kart.grid_columnconfigure(0,weight=1)
@@ -2451,8 +2971,8 @@ class DentalApp(ctk.CTk):
             # Sil butonu
             idx=len(notlar)-1-i
             ctk.CTkButton(kart,text=t("Sil"),width=50,height=22,
-                           fg_color="#ffeeee",text_color="#cc3333",
-                           hover_color="#ffcccc",
+                           fg_color=TH["danger_bg"],text_color=TH["danger_text"],
+                           hover_color=TH["danger_hover"],
                            command=lambda ix=idx:self._not_sil(ix)).pack(
                            anchor="e",padx=8,pady=(0,6))
 
@@ -2497,19 +3017,26 @@ class DentalApp(ctk.CTk):
 
     def _rontgen_ekle(self):
         if not self.aktif_hid: return
-        from tkinter import filedialog
+        from tkinter import filedialog, messagebox
+        raw_desen = " ".join(f"*{e}" for e in RAW_UZANTILAR)
         dosya=filedialog.askopenfilename(
             title="Rentgen Seç",
-            filetypes=[("Görüntü","*.png *.jpg *.jpeg *.bmp"),("Tüm","*.*")])
+            filetypes=[("Görüntü","*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.dcm" +
+                        (" " + raw_desen if raw_desen.strip() else "")),
+                       ("RAW (Canon/Nikon)", raw_desen or "*.cr2"),
+                       ("Tüm","*.*")])
         if not dosya: return
         import base64
         from datetime import datetime
-        with open(dosya,"rb") as f:
-            b64=base64.b64encode(f.read()).decode()
+        img = sekli_ac(dosya)
+        if img is None:
+            messagebox.showerror(t("Yükleme Hatası"), t("Şəkil açılmadı və ya dəstəklənməyən formatdır."))
+            return
+        b64 = base64.b64encode(sekli_sixisdir(img)).decode()
         h=self.hastalar[self.aktif_hid]
         h.setdefault("rontgenler",[]).append({
             "tarih":datetime.now().strftime("%d.%m.%Y %H:%M"),
-            "dosya":os.path.basename(dosya),
+            "dosya":os.path.splitext(os.path.basename(dosya))[0] + ".jpg",
             "data":b64
         })
         veri_kaydet(self.hastalar)
@@ -2538,15 +3065,15 @@ class DentalApp(ctk.CTk):
         from io import BytesIO
 
         def _rounded(img: Image.Image, r: int) -> ImageTk.PhotoImage:
-            """Return an ImageTk.PhotoImage with rounded corners (white bg)."""
+            """Return an ImageTk.PhotoImage with rounded corners (panel bg)."""
             w, h = img.size
             mask = Image.new("L", (w, h), 0)
             draw = ImageDraw.Draw(mask)
             draw.rounded_rectangle((0, 0, w - 1, h - 1), radius=r, fill=255)
             out = Image.new("RGBA", (w, h), (255, 255, 255, 0))
             out.paste(img.convert("RGBA"), mask=mask)
-            # Composite onto white so tk.Label bg="white" blends seamlessly
-            bg = Image.new("RGBA", (w, h), (255, 255, 255, 255))
+            # Composite onto the panel color so tk.Label bg=TH["panel"] blends seamlessly
+            bg = Image.new("RGBA", (w, h), (*_hex_to_rgb(TH["panel"]), 255))
             bg.paste(out, mask=out.split()[3])
             return ImageTk.PhotoImage(bg.convert("RGB"))
 
@@ -2557,7 +3084,7 @@ class DentalApp(ctk.CTk):
                     ((row_start + c, rontgenler[row_start + c])
                      for c in range(COLS)
                      if row_start + c < len(rontgenler))):
-                kart = ctk.CTkFrame(row_f, fg_color="white", corner_radius=10)
+                kart = ctk.CTkFrame(row_f, fg_color=TH["panel"], corner_radius=10)
                 kart.pack(side="left", padx=3, pady=3, anchor="n")
                 # Filename + date
                 ctk.CTkLabel(kart,
@@ -2570,13 +3097,14 @@ class DentalApp(ctk.CTk):
                              text_color="#999").pack(padx=6, pady=(0, 3))
                 # Thumbnail with rounded corners
                 try:
-                    img_data = base64.b64decode(r["data"])
+                    img_data = (base64.b64decode(r["thumb_b64"]) if r.get("thumb_b64")
+                                else self._img_bytes(r))
                     img = Image.open(BytesIO(img_data)).convert("RGB")
                     ratio = THUMB / img.width if img.width > THUMB else 1
                     img = img.resize((int(img.width * ratio),
                                       int(img.height * ratio)), Image.LANCZOS)
                     photo = _rounded(img, RADIUS)
-                    lbl = tk.Label(kart, image=photo, bg="white", cursor="hand2",
+                    lbl = tk.Label(kart, image=photo, bg=TH["panel"], cursor="hand2",
                                    borderwidth=0, highlightthickness=0)
                     lbl.image = photo
                     lbl.pack(padx=6, pady=2)
@@ -2587,8 +3115,8 @@ class DentalApp(ctk.CTk):
                                  wraplength=THUMB).pack(padx=6, pady=4)
                 # Delete button
                 ctk.CTkButton(kart, text=t("Sil"), width=44, height=20,
-                               fg_color="#ffeeee", text_color="#cc3333",
-                               hover_color="#ffcccc",
+                               fg_color=TH["danger_bg"], text_color=TH["danger_text"],
+                               hover_color=TH["danger_hover"],
                                font=ctk.CTkFont(size=10),
                                command=lambda ix=i: self._rontgen_sil(ix)).pack(
                                anchor="e", padx=5, pady=(1, 5))
@@ -2615,7 +3143,7 @@ class DentalApp(ctk.CTk):
         sw = pencere.winfo_screenwidth()
         sh = pencere.winfo_screenheight()
 
-        img_data = base64.b64decode(r["data"])
+        img_data = self._img_bytes(r)
         img = Image.open(BytesIO(img_data)).convert("RGB")
 
         # Ekrana sığdır
@@ -2678,20 +3206,27 @@ class DentalApp(ctk.CTk):
 
     def _foto_ekle(self, tab):
         if not self.aktif_hid or not self.aktif_vid: return
-        from tkinter import filedialog
+        from tkinter import filedialog, messagebox
         from datetime import datetime
+        raw_desen = " ".join(f"*{e}" for e in RAW_UZANTILAR)
         dosya = filedialog.askopenfilename(
             title="Foto Seç",
-            filetypes=[("Görüntü","*.png *.jpg *.jpeg *.bmp"),("Tüm","*.*")])
+            filetypes=[("Görüntü","*.png *.jpg *.jpeg *.bmp *.tif *.tiff" +
+                        (" " + raw_desen if raw_desen.strip() else "")),
+                       ("RAW (Canon/Nikon)", raw_desen or "*.cr2"),
+                       ("Tüm","*.*")])
         if not dosya: return
-        with open(dosya,"rb") as f:
-            b64 = base64.b64encode(f.read()).decode()
+        img = sekli_ac(dosya)
+        if img is None:
+            messagebox.showerror(t("Yükleme Hatası"), t("Şəkil açılmadı və ya dəstəklənməyən formatdır."))
+            return
+        b64 = base64.b64encode(sekli_sixisdir(img)).decode()
         vaka = self.hastalar[self.aktif_hid]["vakalar"][self.aktif_vid]
         key  = {"plan": "fotolar_plan", "tedavi": "fotolar_tedavi",
                 "ilkin": "fotolar_ilkin"}[tab]
         vaka.setdefault(key,[]).append({
             "tarih": datetime.now().strftime("%d.%m.%Y %H:%M"),
-            "dosya": os.path.basename(dosya),
+            "dosya": os.path.splitext(os.path.basename(dosya))[0] + ".jpg",
             "data":  b64,
         })
         veri_kaydet(self.hastalar)
@@ -2716,7 +3251,7 @@ class DentalApp(ctk.CTk):
             ImageDraw.Draw(mask).rounded_rectangle((0,0,w-1,h-1),radius=r,fill=255)
             out = Image.new("RGBA",(w,h),(255,255,255,0))
             out.paste(img.convert("RGBA"),mask=mask)
-            bg = Image.new("RGBA",(w,h),(255,255,255,255))
+            bg = Image.new("RGBA",(w,h),(*_hex_to_rgb(TH["panel"]),255))
             bg.paste(out, mask=out.split()[3])
             return ImageTk.PhotoImage(bg.convert("RGB"))
 
@@ -2733,7 +3268,7 @@ class DentalApp(ctk.CTk):
                         ((row_start+c, fotolar[row_start+c])
                          for c in range(COLS)
                          if row_start+c < len(fotolar))):
-                    kart = ctk.CTkFrame(row_f, fg_color="white", corner_radius=8)
+                    kart = ctk.CTkFrame(row_f, fg_color=TH["panel"], corner_radius=8)
                     kart.pack(side="left", padx=2, pady=2, anchor="n")
                     ctk.CTkLabel(kart, text=foto.get("dosya",""),
                                  font=ctk.CTkFont(size=9,weight="bold"),
@@ -2742,11 +3277,13 @@ class DentalApp(ctk.CTk):
                                  font=ctk.CTkFont(size=8),
                                  text_color="#999").pack(padx=4,pady=(0,2))
                     try:
-                        img = Image.open(BytesIO(base64.b64decode(foto["data"]))).convert("RGB")
+                        img_data = (base64.b64decode(foto["thumb_b64"]) if foto.get("thumb_b64")
+                                    else self._img_bytes(foto))
+                        img = Image.open(BytesIO(img_data)).convert("RGB")
                         ratio = THUMB/img.width if img.width > THUMB else 1
                         img   = img.resize((int(img.width*ratio),int(img.height*ratio)),Image.LANCZOS)
                         photo = _rounded(img, RADIUS)
-                        lbl   = tk.Label(kart, image=photo, bg="white", cursor="hand2",
+                        lbl   = tk.Label(kart, image=photo, bg=TH["panel"], cursor="hand2",
                                          borderwidth=0, highlightthickness=0)
                         lbl.image = photo
                         lbl.pack(padx=4, pady=2)
@@ -2756,8 +3293,8 @@ class DentalApp(ctk.CTk):
                                      text_color="red",
                                      wraplength=THUMB).pack(padx=4,pady=4)
                     ctk.CTkButton(kart, text=t("Sil"), width=40, height=18,
-                                   fg_color="#ffeeee", text_color="#cc3333",
-                                   hover_color="#ffcccc",
+                                   fg_color=TH["danger_bg"], text_color=TH["danger_text"],
+                                   hover_color=TH["danger_hover"],
                                    font=ctk.CTkFont(size=9),
                                    command=lambda ix=i, t=tab: self._foto_sil(ix, t)).pack(
                                    anchor="e", padx=4, pady=(1,4))
@@ -2774,7 +3311,7 @@ class DentalApp(ctk.CTk):
         pencere.configure(bg="black")
         sw = pencere.winfo_screenwidth()
         sh = pencere.winfo_screenheight()
-        img   = Image.open(BytesIO(base64.b64decode(foto["data"]))).convert("RGB")
+        img   = Image.open(BytesIO(self._img_bytes(foto))).convert("RGB")
         ratio = min((sw-100)/img.width, (sh-100)/img.height, 1.0)
         img   = img.resize((int(img.width*ratio), int(img.height*ratio)), Image.LANCZOS)
         photo = ImageTk.PhotoImage(img)
@@ -2979,9 +3516,9 @@ class DentalApp(ctk.CTk):
             row.pack(fill="x",pady=2)
             ctk.CTkLabel(row,text=f"{t('Diş')} {n_str}",width=52,
                          font=ctk.CTkFont(size=11,weight="bold"),
-                         text_color="#333").pack(side="left")
+                         text_color=TH["txt"]).pack(side="left")
             ctk.CTkLabel(row,text=metin,font=ctk.CTkFont(size=11),
-                         text_color="#1565C0").pack(side="left",padx=4)
+                         text_color=TH["accent"]).pack(side="left",padx=4)
 
     def _uygula_plan(self,n,zone=None):
         if not self.aktif_hid or not self.aktif_vid: return
@@ -3116,10 +3653,48 @@ class DentalApp(ctk.CTk):
             row.pack(fill="x",pady=(2,6))
             ctk.CTkLabel(row,text=f"{t('Diş')} {kayit['dis']}",anchor="w",
                          font=ctk.CTkFont(size=11,weight="bold"),
-                         text_color="#333").pack(fill="x")
+                         text_color=TH["txt"]).pack(fill="x")
             ctk.CTkLabel(row,text=f"{kayit['aksiyon']}-{kayit['tarix']}",anchor="w",
                          justify="left",wraplength=190,font=ctk.CTkFont(size=11),
-                         text_color="#1565C0").pack(fill="x")
+                         text_color=TH["accent"]).pack(fill="x")
+        self._timeline_guncelle()
+
+    _TIMELINE_RENG = {
+        "kanal": TH["accent"], "kron": TH["indigo"], "curuk": "#E0A020",
+        "dolgu": TH["ok"], "tac": "#C04FD6",
+    }
+
+    def _timeline_guncelle(self):
+        try:
+            for w in self.muayine_xetti.winfo_children(): w.destroy()
+        except: pass
+        if not self.aktif_hid or not self.aktif_vid: return
+        h = self.hastalar[self.aktif_hid]
+        vaka = h.get("vakalar",{}).get(self.aktif_vid,{})
+        tarixce = vaka.get("tedavi_tarixce", [])
+        if not tarixce:
+            ctk.CTkLabel(self.muayine_xetti,text=t("Hələ müalicə qeydi yoxdur"),
+                         font=ctk.CTkFont(size=11),text_color=TH["txt_faint"]).pack(
+                         side="left",padx=12,pady=18)
+            return
+        sonuncu = len(tarixce) - 1
+        for i,kayit in enumerate(tarixce):
+            reng = self._TIMELINE_RENG.get(kayit.get("kateqoriya"), TH["accent"])
+            cari = (i == sonuncu)
+            if i > 0:
+                ctk.CTkFrame(self.muayine_xetti,height=2,width=22,
+                             fg_color=TH["accent_soft"]).pack(side="left",anchor="n",pady=(13,0))
+            addim = ctk.CTkFrame(self.muayine_xetti,fg_color="transparent",width=92)
+            addim.pack(side="left",anchor="n")
+            dairə = ctk.CTkLabel(addim,text="●",font=ctk.CTkFont(size=16 if cari else 11),
+                                  text_color=reng,height=16)
+            dairə.pack(pady=(6,0))
+            ctk.CTkLabel(addim,
+                         text=f"{t('Diş')} {kayit.get('dis','')} · {kayit.get('aksiyon','')}",
+                         font=ctk.CTkFont(size=9,weight="bold"),
+                         text_color=TH["txt"],wraplength=90,justify="center").pack()
+            ctk.CTkLabel(addim,text=kayit.get("tarix",""),
+                         font=ctk.CTkFont(size=8),text_color=TH["txt_faint"]).pack()
 
     def _plan_guncelle(self):
         try:
@@ -3136,9 +3711,9 @@ class DentalApp(ctk.CTk):
             row.pack(fill="x",pady=2)
             ctk.CTkLabel(row,text=f"{t('Diş')} {n_str}",width=52,
                          font=ctk.CTkFont(size=11,weight="bold"),
-                         text_color="#333").pack(side="left")
+                         text_color=TH["txt"]).pack(side="left")
             ctk.CTkLabel(row,text=metin,font=ctk.CTkFont(size=11),
-                         text_color="#1565C0").pack(side="left",padx=4)
+                         text_color=TH["accent"]).pack(side="left",padx=4)
 
     def _kaydet(self):
         if not self.aktif_hid: return
@@ -3552,6 +4127,103 @@ class DentalApp(ctk.CTk):
                     return _sb_http(method, path, body, token=AYARLAR["sb_access_token"], extra_headers=extra_headers, timeout=timeout)
             raise
 
+    def _cloud_authed_request_raw(self, method, path, data=None, content_type=None, timeout=None):
+        """`_cloud_authed_request` ilə eyni token/401-refresh məntiqi, Storage
+        bayt oxuma/yazma üçün (`_sb_http_raw`)."""
+        tok = AYARLAR.get("sb_access_token")
+        if not tok:
+            raise RuntimeError("Bulud girişi edilməyib")
+        try:
+            return _sb_http_raw(method, path, data=data, token=tok, content_type=content_type, timeout=timeout or 60)
+        except RuntimeError as e:
+            if "HTTP 401" in str(e) and AYARLAR.get("sb_refresh_token"):
+                ref = sb_refresh(AYARLAR["sb_refresh_token"])
+                if ref.get("access_token"):
+                    AYARLAR["sb_access_token"] = ref["access_token"]
+                    AYARLAR["sb_refresh_token"] = ref.get("refresh_token", AYARLAR["sb_refresh_token"])
+                    ayar_kaydet(AYARLAR)
+                    return _sb_http_raw(method, path, data=data, token=AYARLAR["sb_access_token"],
+                                         content_type=content_type, timeout=timeout or 60)
+            raise
+
+    def _img_bytes(self, entry):
+        """Röntgen/foto girişindən xam şəkil baytını qaytarır — köhnə format
+        (`"data"`: b64) birbaşa decode olunur; yeni format (`"storage_path"`)
+        əvvəlcə yerli keşdən (`%APPDATA%\\BlueX\\cache_img`), tapılmazsa
+        Supabase Storage-dən endirilib keşlənir."""
+        if entry.get("data"):
+            return base64.b64decode(entry["data"])
+        sp = entry.get("storage_path")
+        if not sp:
+            raise RuntimeError("Şəkil məlumatı yoxdur")
+        cache_path = _img_cache_path(sp)
+        if os.path.exists(cache_path):
+            with open(cache_path, "rb") as f:
+                return f.read()
+        raw = self._cloud_authed_request_raw("GET", f"/storage/v1/object/patient-images/{sp}")
+        try:
+            with open(cache_path, "wb") as f:
+                f.write(raw)
+        except Exception:
+            pass
+        return raw
+
+    def _auto_migrate_images(self, h, hid):
+        """Hələ köhnə formatda (`"data"`: xam b64) olan röntgen/foto girişlərini
+        buluda göndərməzdən ƏVVƏL sıxıb Supabase Storage-ə yükləyir və girişi
+        yerində (`"storage_path"`+`"thumb_b64"`) formatına çevirir — bulud 500MB
+        kvotasının yenidən dolmasının qarşısını alır (bax [[dental-supabase-quota-full]]).
+        Bulud girişi yoxdursa (uid yoxdur) heç nə etmir."""
+        uid = AYARLAR.get("sb_user_id")
+        if not uid:
+            return
+        changed = False
+
+        def _mig_one(entry, kind):
+            nonlocal changed
+            if not entry.get("data"):
+                return
+            try:
+                raw = base64.b64decode(entry["data"])
+                img = Image.open(BytesIO(raw))
+                if img.mode not in ("RGB", "L"):
+                    img = img.convert("RGB")
+                full_img = img
+                if kind == "foto" and full_img.width > 2000:
+                    ratio = 2000 / full_img.width
+                    full_img = full_img.resize((2000, int(full_img.height * ratio)), Image.LANCZOS)
+                buf = BytesIO()
+                full_img.save(buf, format="JPEG", quality=95 if kind == "rontgen" else 85)
+                full_bytes = buf.getvalue()
+
+                thumb_img = img
+                if thumb_img.width > 300:
+                    ratio = 300 / thumb_img.width
+                    thumb_img = thumb_img.resize((300, int(thumb_img.height * ratio)), Image.LANCZOS)
+                tbuf = BytesIO()
+                thumb_img.save(tbuf, format="JPEG", quality=70)
+                thumb_bytes = tbuf.getvalue()
+
+                fname = f"{kind}_{uuid.uuid4().hex[:12]}.jpg"
+                path = f"{uid}/{hid}/{fname}"
+                self._cloud_authed_request_raw("POST", f"/storage/v1/object/patient-images/{path}",
+                                                 data=full_bytes, content_type="image/jpeg")
+                entry.pop("data", None)
+                entry["storage_path"] = path
+                entry["thumb_b64"] = base64.b64encode(thumb_bytes).decode()
+                changed = True
+            except Exception as e:
+                print(f"[Miqrasiya] şəkil köçürülə bilmədi ({hid}): {e}")
+
+        for r in h.get("rontgenler", []) or []:
+            _mig_one(r, "rontgen")
+        for vaka in (h.get("vakalar") or {}).values():
+            for key in ("fotolar_plan", "fotolar_tedavi", "fotolar_ilkin"):
+                for ph in vaka.get(key, []) or []:
+                    _mig_one(ph, "foto")
+        if changed:
+            veri_kaydet(self.hastalar)
+
     def _cloud_authed_request_deneli(self, method, path, body=None, extra_headers=None, timeout=None, max_deneme=3):
         """`_cloud_authed_request`-in üzərinə keçici (transient) server-tərəfli
         xətalar üçün avtomatik təkrar cəhd qatı — canlı sınaqla təsdiqləndi:
@@ -3605,6 +4277,10 @@ class DentalApp(ctk.CTk):
             if ilerleme:
                 try: ilerleme(i, toplam, h.get("ad", hid))
                 except Exception: pass
+            try:
+                self._auto_migrate_images(h, hid)
+            except Exception as e:
+                print(f"[Miqrasiya] {hid} üçün avtomatik şəkil köçürməsi uğursuz: {e}")
             row = {"hasta_id": hid, "owner": uid, "data": h, "updated_at": now}
             # keçici server xətaları (timeout, HTTP 520/502/503) üçün avtomatik təkrar
             # cəhd (bax _cloud_authed_request_deneli şərhi — böyük payload-larda bu
@@ -3763,9 +4439,9 @@ class DentalApp(ctk.CTk):
             return
         arama_var = tk.StringVar()
         ctk.CTkEntry(dlg, textvariable=arama_var, placeholder_text=t("Ada görə axtar…"),
-                     height=32, border_color=TH["accent_soft"], fg_color="white"
+                     height=32, border_color=TH["accent_soft"], fg_color=TH["panel_soft"]
                      ).pack(fill="x", padx=16, pady=(0, 8))
-        liste = ctk.CTkScrollableFrame(dlg, fg_color="white", corner_radius=10)
+        liste = ctk.CTkScrollableFrame(dlg, fg_color=TH["panel"], corner_radius=10)
         liste.pack(fill="both", expand=True, padx=16, pady=(0, 8))
         durum = ctk.CTkLabel(dlg, text="", font=ctk.CTkFont(size=11), text_color=TH["txt_sub"])
         durum.pack(anchor="w", padx=16, pady=(0, 12))
@@ -3928,7 +4604,7 @@ class DentalApp(ctk.CTk):
         row.pack(fill="x", pady=(6, 6))
         yol_var = tk.StringVar(value=xray_watch_dir())
         ctk.CTkEntry(row, textvariable=yol_var, height=32,
-                     border_color=TH["accent_soft"], fg_color="white").pack(side="left", fill="x", expand=True)
+                     border_color=TH["accent_soft"], fg_color=TH["panel_soft"]).pack(side="left", fill="x", expand=True)
         def _gozat():
             d = filedialog.askdirectory(parent=win,
                                         initialdir=yol_var.get() if os.path.isdir(yol_var.get()) else "C:\\")
@@ -4148,10 +4824,10 @@ class DentalApp(ctk.CTk):
                 email_var = tk.StringVar(value=AYARLAR.get("sb_email", ""))
                 pass_var = tk.StringVar()
                 ctk.CTkEntry(erow, textvariable=email_var, placeholder_text=t("E-poçt"), height=32,
-                             border_color=TH["accent_soft"], fg_color="white"
+                             border_color=TH["accent_soft"], fg_color=TH["panel_soft"]
                              ).pack(side="left", fill="x", expand=True, padx=(0, 6))
                 ctk.CTkEntry(erow, textvariable=pass_var, placeholder_text=t("Şifrə"), show="•", height=32,
-                             border_color=TH["accent_soft"], fg_color="white", width=140
+                             border_color=TH["accent_soft"], fg_color=TH["panel_soft"], width=140
                              ).pack(side="left")
                 cstatus = ctk.CTkLabel(cloud_frame, text="", font=ctk.CTkFont(size=11),
                                        text_color=TH["txt_sub"], justify="left", wraplength=560)
@@ -4303,6 +4979,108 @@ class DentalApp(ctk.CTk):
         oyadici_entry.bind("<Return>", _oyadici_kaydet)
         oyadici_entry.bind("<KP_Enter>", _oyadici_kaydet)
         oyadici_status.pack(anchor="w", pady=(0, 8))
+
+        ctk.CTkLabel(t_sesli, text=t("ANTHROPIC API AÇARI (İSTƏYƏ BAĞLI)"),
+                     font=ctk.CTkFont(size=11, weight="bold"),
+                     text_color=TH["accent"]).pack(anchor="w", pady=(4, 2))
+        ctk.CTkLabel(t_sesli,
+                     text=t("Daxil etsəniz, əmrin mənasını yerli qaydalar əvəzinə Claude AI "
+                            "(Anthropic) təhlil edəcək — daha çevik, amma mətn (yalnız tanınan "
+                            "söz, SƏS/şəkil YOX) internetə göndərilir və öz hesabınızdan ödənilir. "
+                            "Boş qalsa, hər şey əvvəlki kimi tam yerli (offline) işləyir."),
+                     font=ctk.CTkFont(size=10), text_color=TH["txt_faint"],
+                     wraplength=480, justify="left").pack(anchor="w", pady=(0, 6))
+        api_key_var = tk.StringVar(value=AYARLAR.get("anthropic_api_key") or "")
+        api_key_status = ctk.CTkLabel(t_sesli, text="", font=ctk.CTkFont(size=10),
+                                       text_color="#2E7D32")
+
+        def _api_key_kaydet(*_):
+            AYARLAR["anthropic_api_key"] = api_key_var.get().strip()
+            ayar_kaydet(AYARLAR)
+            try:
+                api_key_status.configure(text=t("✓ Saxlandı"))
+                self.after(1500, lambda: api_key_status.configure(text=""))
+            except Exception:
+                pass
+
+        api_key_entry = ctk.CTkEntry(t_sesli, textvariable=api_key_var, width=420, height=32,
+                                      show="•", border_color=TH["accent_soft"])
+        api_key_entry.pack(anchor="w", pady=(0, 2))
+        api_key_entry.bind("<FocusOut>", _api_key_kaydet)
+        api_key_entry.bind("<Return>", _api_key_kaydet)
+        api_key_entry.bind("<KP_Enter>", _api_key_kaydet)
+        api_key_status.pack(anchor="w", pady=(0, 8))
+
+        ctk.CTkFrame(t_sesli, height=1, fg_color="#3B5E8F").pack(fill="x", pady=(2, 10))
+
+        # ── Ümumi AI Söhbəti (push-to-talk) ──
+        ctk.CTkLabel(t_sesli, text=t("ÜMUMİ AI SÖHBƏTİ (PUSH-TO-TALK)"),
+                     font=ctk.CTkFont(size=11, weight="bold"),
+                     text_color=TH["accent"]).pack(anchor="w", pady=(0, 2))
+        ctk.CTkLabel(t_sesli,
+                     text=t("Düyməni basılı saxlayıb danışın — tanınan mətn Claude-a adi "
+                            "söhbət mesajı kimi göndərilir (yuxarıdaki Anthropic açarı "
+                            "tələb olunur), cavab həm yazılı, həm səslə (internet lazımdır) "
+                            "gəlir. Dental əmr tanınarsa, icra ETMƏZDƏN ƏVVƏL təsdiq istənir."),
+                     font=ctk.CTkFont(size=10), text_color=TH["txt_faint"],
+                     wraplength=480, justify="left").pack(anchor="w", pady=(0, 6))
+
+        chat_aktiv_var = tk.BooleanVar(value=chat_asistent_aktiv())
+
+        def _chat_toggle():
+            if chat_aktiv_var.get() and not (AYARLAR.get("anthropic_api_key") or "").strip():
+                import tkinter.messagebox as mb
+                mb.showwarning(t("AI Söhbət"), t("Əvvəlcə yuxarıda Anthropic API açarını daxil edin."))
+                chat_aktiv_var.set(False)
+                return
+            AYARLAR["chat_asistent_aktiv"] = chat_aktiv_var.get()
+            ayar_kaydet(AYARLAR)
+            if chat_aktiv_var.get():
+                self._chat_baslat()
+            else:
+                self._chat_dayandir()
+
+        ctk.CTkCheckBox(t_sesli, text=t("Ümumi AI söhbətini aktivləşdir"),
+                        variable=chat_aktiv_var, font=ctk.CTkFont(size=12),
+                        text_color=TH["txt"], command=_chat_toggle).pack(anchor="w", pady=(0, 10))
+
+        ctk.CTkLabel(t_sesli, text=t("DÜYMƏ (PUSH-TO-TALK)"), font=ctk.CTkFont(size=11, weight="bold"),
+                     text_color=TH["accent"]).pack(anchor="w", pady=(4, 2))
+        hotkey_var = tk.StringVar(value=chat_hotkey())
+        hotkey_status = ctk.CTkLabel(t_sesli, text="", font=ctk.CTkFont(size=10),
+                                      text_color="#2E7D32")
+
+        def _hotkey_kaydet(*_):
+            AYARLAR["chat_hotkey"] = (hotkey_var.get() or "f9").strip().lower()
+            ayar_kaydet(AYARLAR)
+            if self._chat_hotkey_qeydli:
+                self._chat_hotkey_sil()
+                self._chat_hotkey_qeydiyyat()
+            try:
+                hotkey_status.configure(text=t("✓ Saxlandı"))
+                self.after(1500, lambda: hotkey_status.configure(text=""))
+            except Exception:
+                pass
+
+        hotkey_entry = ctk.CTkEntry(t_sesli, textvariable=hotkey_var, width=120, height=32,
+                                     border_color=TH["accent_soft"])
+        hotkey_entry.pack(anchor="w", pady=(0, 2))
+        hotkey_entry.bind("<FocusOut>", _hotkey_kaydet)
+        hotkey_entry.bind("<Return>", _hotkey_kaydet)
+        hotkey_entry.bind("<KP_Enter>", _hotkey_kaydet)
+        hotkey_status.pack(anchor="w", pady=(0, 8))
+
+        ctk.CTkLabel(t_sesli, text=t("SƏS (TTS)"), font=ctk.CTkFont(size=11, weight="bold"),
+                     text_color=TH["accent"]).pack(anchor="w", pady=(4, 2))
+        ses_var = tk.StringVar(value=tts_ses_adi())
+
+        def _ses_kaydet(secim):
+            AYARLAR["tts_ses"] = secim
+            ayar_kaydet(AYARLAR)
+
+        ctk.CTkOptionMenu(t_sesli, variable=ses_var,
+                          values=["az-AZ-BabekNeural", "az-AZ-BanuNeural"],
+                          width=220, height=32, command=_ses_kaydet).pack(anchor="w", pady=(0, 10))
 
         ctk.CTkFrame(t_sesli, height=1, fg_color="#3B5E8F").pack(fill="x", pady=(0, 10))
         ctk.CTkLabel(t_sesli, text=t("NÜMUNƏ İFADƏLƏR"), font=ctk.CTkFont(size=11, weight="bold"),
@@ -4983,7 +5761,7 @@ class DentalApp(ctk.CTk):
         ctk.CTkLabel(dlg,
                      text=t("🦷  Yeni Rentgen Aşkarlandı"),
                      font=ctk.CTkFont(size=15, weight="bold"),
-                     text_color="#1565C0").pack(pady=(18, 2))
+                     text_color=TH["accent"]).pack(pady=(18, 2))
         ctk.CTkLabel(dlg,
                      text=f"{fname}  ·  {ftime}",
                      font=ctk.CTkFont(size=11),
@@ -5079,7 +5857,7 @@ class DentalApp(ctk.CTk):
                            "timestamp": "", "done": False}
             else:
                 r = rontgenler[idx]
-                img = Image.open(BytesIO(base64.b64decode(r["data"]))).convert("RGB")
+                img = Image.open(BytesIO(self._img_bytes(r))).convert("RGB")
                 buf = BytesIO()
                 img.save(buf, format="JPEG", quality=92)
                 jpeg_bytes = buf.getvalue()
@@ -5271,13 +6049,13 @@ class DentalApp(ctk.CTk):
         dlg.grab_set()
         ctk.CTkLabel(dlg, text=t("🚀  Yeni Sürüm Mevcut"),
                      font=ctk.CTkFont(size=15, weight="bold"),
-                     text_color="#1565C0").pack(pady=(18, 4))
+                     text_color=TH["accent"]).pack(pady=(18, 4))
         ctk.CTkLabel(dlg, text=f"Mevcut sürüm: v{APP_VERSION}   →   Yeni sürüm: v{yeni_surum}",
-                     font=ctk.CTkFont(size=12), text_color="#333").pack()
+                     font=ctk.CTkFont(size=12), text_color=TH["txt"]).pack()
         if notlar:
             ctk.CTkLabel(dlg, text=notlar, font=ctk.CTkFont(size=11), text_color="#666",
                          justify="left", wraplength=380).pack(pady=(10, 0), padx=20)
-        durum = ctk.CTkLabel(dlg, text="", font=ctk.CTkFont(size=11), text_color="#1565C0")
+        durum = ctk.CTkLabel(dlg, text="", font=ctk.CTkFont(size=11), text_color=TH["accent"])
         durum.pack(pady=(10, 4))
         btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
         btn_row.pack(pady=10)
@@ -5318,7 +6096,7 @@ class DentalApp(ctk.CTk):
                         if total:
                             yuzde = int(okunan * 100 / total)
                             self.after(0, lambda y=yuzde: durum_lbl.configure(
-                                text=f"İndiriliyor… %{y}", text_color="#1565C0"))
+                                text=f"İndiriliyor… %{y}", text_color=TH["accent"]))
                 def basar():
                     durum_lbl.configure(text="İndirildi, kurulum başlatılıyor…", text_color="#0E9F6E")
                     self.after(400, lambda: self._guncelleme_kur_baslat(tmp_path))
@@ -5351,6 +6129,227 @@ class DentalApp(ctk.CTk):
         except Exception:
             pass
 
+    # ── SƏSLİ ASİSTENT AVATARI (yarı-həkim/yarı-robot, pəncərənin yuxarısında) ──
+    def _sesli_avatar_yarat(self):
+        """Çərçivəsiz, həmişə-üstdə kiçik pəncərə yaradır (əsas pəncərənin solunda,
+        boş sahədə), siçanla sürüklənə bilir (mövqe yadda saxlanılır), və yalnız
+        proqram ön planda olanda görünür (başqa pəncərələrdə görünməsin deyə).
+        Artıq varsa yalnız göstərir (deiconify)."""
+        win = getattr(self, "_avatar_win", None)
+        if win and win.winfo_exists():
+            try: win.deiconify()
+            except Exception: pass
+            self._sesli_avatar_hal("idle")
+            return
+        TRANSKEY = "#010203"
+        win = tk.Toplevel(self)
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        win.configure(bg=TRANSKEY)
+        try:
+            win.wm_attributes("-transparentcolor", TRANSKEY)
+        except Exception:
+            pass  # Windows-dan başqa platformada bu atribut yoxdur — pəncərə sadəcə normal fonlu qalır
+        lbl = tk.Label(win, bg=TRANSKEY, bd=0, highlightthickness=0, cursor="fleur")
+        lbl.pack()
+        self._avatar_win = win
+        self._avatar_lbl = lbl
+        self._avatar_hal_adi = "idle"
+        self._avatar_nebz_on = False
+        self._avatar_qabarcik = None
+        self._avatar_drag_data = None
+
+        # siçanla sürükləmə — buraxılanda mövqe əsas pəncərəyə NİSBİ ofset kimi
+        # AYARLAR-a yazılır (sonrakı açılışlarda da yadda qalsın deyə)
+        lbl.bind("<ButtonPress-1>", self._sesli_avatar_surukle_basla)
+        lbl.bind("<B1-Motion>", self._sesli_avatar_surukle)
+        lbl.bind("<ButtonRelease-1>", self._sesli_avatar_surukle_bitir)
+
+        # proqram arxa plana keçəndə avatar da gizlənsin (başqa pəncərələrin
+        # üstündə görünməsin) — self VƏ avatar pəncərəsinin hər ikisi "bu proqrama
+        # aiddir", ona görə ikisi arasında keçiddə gizlənməməli, yalnız HƏR İKİSİ
+        # fokusu itirəndə (başqa tətbiqə keçiləndə)
+        self.bind("<FocusOut>", lambda e: self.after(150, self._sesli_avatar_fokus_yoxla), add="+")
+        self.bind("<FocusIn>", lambda e: self.after(150, self._sesli_avatar_fokus_yoxla), add="+")
+        win.bind("<FocusOut>", lambda e: self.after(150, self._sesli_avatar_fokus_yoxla), add="+")
+        win.bind("<FocusIn>", lambda e: self.after(150, self._sesli_avatar_fokus_yoxla), add="+")
+
+        self._sesli_avatar_pozisyon()
+        self.bind("<Configure>", lambda e: self._sesli_avatar_pozisyon(), add="+")
+        self._sesli_avatar_hal("idle")
+
+    def _sesli_avatar_fokus_yoxla(self):
+        """Tkinter-in `focus_get()`-i bu proqramın pəncərələrindən HƏR HANSI biri
+        fokusdaykən widget qaytarır, başqa tətbiqə keçiləndə isə None — buna görə
+        əsas pəncərə/avatar arasında keçiddə gizlənmir, yalnız proqramdan tamamilə
+        çıxanda (başqa pəncərə öndə olanda)."""
+        win = getattr(self, "_avatar_win", None)
+        if not win or not win.winfo_exists():
+            return
+        sesli_aktiv = bool(self._sesli_thread and self._sesli_thread.is_alive())
+        chat_aktiv = bool(getattr(self, "_chat_hotkey_qeydli", None))
+        if not (sesli_aktiv or chat_aktiv):
+            return  # heç biri aktiv deyilsə _sesli_dayandir/_chat_dayandir onsuz da gizlədib
+        try:
+            odakli = self.focus_get()
+        except Exception:
+            odakli = None
+        if odakli is None:
+            try: win.withdraw()
+            except Exception: pass
+            qb = getattr(self, "_avatar_qabarcik", None)
+            if qb and qb.winfo_exists():
+                try: qb.withdraw()
+                except Exception: pass
+        else:
+            try: win.deiconify()
+            except Exception: pass
+
+    def _sesli_avatar_surukle_basla(self, event):
+        win = getattr(self, "_avatar_win", None)
+        if not win: return
+        self._avatar_drag_data = {"x": event.x_root, "y": event.y_root,
+                                   "win_x": win.winfo_x(), "win_y": win.winfo_y()}
+
+    def _sesli_avatar_surukle(self, event):
+        dd = getattr(self, "_avatar_drag_data", None)
+        win = getattr(self, "_avatar_win", None)
+        if not dd or not win: return
+        yeni_x = dd["win_x"] + (event.x_root - dd["x"])
+        yeni_y = dd["win_y"] + (event.y_root - dd["y"])
+        win.geometry(f"+{yeni_x}+{yeni_y}")
+
+    def _sesli_avatar_surukle_bitir(self, event):
+        win = getattr(self, "_avatar_win", None)
+        if not win or not getattr(self, "_avatar_drag_data", None):
+            return
+        self._avatar_drag_data = None
+        try:
+            ofset = [win.winfo_x() - self.winfo_rootx(), win.winfo_y() - self.winfo_rooty()]
+            AYARLAR["sesli_avatar_ofset"] = ofset
+            ayar_kaydet(AYARLAR)
+        except Exception:
+            pass
+
+    def _sesli_avatar_pozisyon(self):
+        win = getattr(self, "_avatar_win", None)
+        if not win or not win.winfo_exists():
+            return
+        if getattr(self, "_avatar_drag_data", None):
+            return  # sürüklənmə davam edir — mövqeni poza bilərik, toxunma
+        try:
+            mx = self.winfo_rootx()
+            my = self.winfo_rooty()
+            uz = _sesli_avatar_uz()
+            pad = 22
+            w, h = uz.width + pad * 2, uz.height + pad * 2
+            ofset = AYARLAR.get("sesli_avatar_ofset")
+            if isinstance(ofset, (list, tuple)) and len(ofset) == 2:
+                x, y = mx + ofset[0], my + ofset[1]
+            else:
+                # defolt: əsas pəncərənin SOLUNDA (boş ekran sahəsində), üst
+                # kənardan kifayət qədər aşağı ki, baş kəsilməsin
+                x = max(10, mx - w - 16)
+                y = my + 90
+            win.geometry(f"{w}x{h}+{x}+{y}")
+        except Exception:
+            pass
+
+    def _sesli_avatar_hal(self, hal):
+        """idle/listening/danisir halları arasında keçid — thread-təhlükəsiz
+        (background thread-dən belə çağırıla bilər, _sesli_status_configure
+        ilə eyni self.after(0,...) nümunəsi)."""
+        def ui():
+            win = getattr(self, "_avatar_win", None)
+            lbl = getattr(self, "_avatar_lbl", None)
+            if not win or not win.winfo_exists() or not lbl:
+                return
+            self._avatar_hal_adi = hal
+            renk = _AVATAR_RENK.get(hal, _AVATAR_RENK["idle"])
+            img = _sesli_avatar_halqali(renk, 1.0)
+            photo = ImageTk.PhotoImage(img)
+            lbl.configure(image=photo)
+            lbl.image = photo
+            if hal == "listening":
+                self._avatar_nebz_tick(0.0)
+            else:
+                self._avatar_nebz_on = False
+        try:
+            self.after(0, ui)
+        except Exception:
+            pass
+
+    def _avatar_nebz_tick(self, faz):
+        if self._avatar_hal_adi != "listening":
+            self._avatar_nebz_on = False
+            return
+        self._avatar_nebz_on = True
+        win = getattr(self, "_avatar_win", None)
+        lbl = getattr(self, "_avatar_lbl", None)
+        if not win or not win.winfo_exists() or not lbl:
+            return
+        parlaqliq = 0.55 + 0.45 * abs(math.sin(faz))
+        img = _sesli_avatar_halqali(_AVATAR_RENK["listening"], parlaqliq)
+        photo = ImageTk.PhotoImage(img)
+        lbl.configure(image=photo)
+        lbl.image = photo
+        self.after(120, lambda: self._avatar_nebz_tick(faz + 0.3))
+
+    def _sesli_avatar_de(self, metin, muddet_ms=2200):
+        """Avatarın altında qısa müddətli mətn 'qabarcığı' göstərir (SƏS YOX —
+        yalnız vizual) — yalnız əsas anlarda çağırılmalıdır (oyadıcı söz
+        eşidiləndə/təsdiq lazım olanda/əməliyyat bitəndə), hər status üçün yox."""
+        def ui():
+            win = getattr(self, "_avatar_win", None)
+            if not win or not win.winfo_exists():
+                return
+            self._sesli_avatar_hal("danisir")
+            qb = getattr(self, "_avatar_qabarcik", None)
+            if not qb or not qb.winfo_exists():
+                qb = tk.Toplevel(self)
+                qb.overrideredirect(True)
+                qb.attributes("-topmost", True)
+                qb_lbl = tk.Label(qb, bg="#1B1E26", fg="white", font=("Segoe UI", 10),
+                                   padx=10, pady=6, wraplength=220, justify="left")
+                qb_lbl.pack()
+                self._avatar_qabarcik = qb
+                self._avatar_qabarcik_lbl = qb_lbl
+            self._avatar_qabarcik_lbl.configure(text=metin)
+            self._avatar_qabarcik.update_idletasks()
+            try:
+                # avatarın HƏQİQİ hazırkı mövqeyi (siçanla sürüklənmiş ola bilər)
+                avatar_win = self._avatar_win
+                avatar_x, avatar_y = avatar_win.winfo_x(), avatar_win.winfo_y()
+                avatar_w, avatar_h = avatar_win.winfo_width(), avatar_win.winfo_height()
+                w = self._avatar_qabarcik.winfo_reqwidth()
+                self._avatar_qabarcik.geometry(
+                    f"+{avatar_x + avatar_w // 2 - w // 2}+{avatar_y + avatar_h + 10}")
+            except Exception:
+                pass
+            self._avatar_qabarcik.deiconify()
+
+            def gizle():
+                try: self._avatar_qabarcik.withdraw()
+                except Exception: pass
+                if getattr(self, "_avatar_win", None) and self._avatar_win.winfo_exists():
+                    self._sesli_avatar_hal("listening")
+            self.after(muddet_ms, gizle)
+        try:
+            self.after(0, ui)
+        except Exception:
+            pass
+
+    def _sesli_avatar_gizle(self):
+        win = getattr(self, "_avatar_win", None)
+        if win and win.winfo_exists():
+            try: win.withdraw()
+            except Exception: pass
+        qb = getattr(self, "_avatar_qabarcik", None)
+        if qb and qb.winfo_exists():
+            try: qb.withdraw()
+            except Exception: pass
+        self._avatar_nebz_on = False
+
     def _sesli_baslat(self):
         if self._sesli_thread and self._sesli_thread.is_alive():
             return
@@ -5362,12 +6361,14 @@ class DentalApp(ctk.CTk):
             return
         self._sesli_stop_event.clear()
         self._sesli_status_configure(t("🎤 Model yüklənir…"), TH["accent"])
+        self._sesli_avatar_yarat()
         self._sesli_thread = threading.Thread(target=self._sesli_loop, daemon=True)
         self._sesli_thread.start()
 
     def _sesli_dayandir(self):
         self._sesli_stop_event.set()
         self._sesli_status_configure("")
+        self._sesli_avatar_gizle()
 
     def _sesli_loop(self):
         try:
@@ -5379,6 +6380,7 @@ class DentalApp(ctk.CTk):
             print(f"[Sesli] model yuklenmedi: {e}")
             return
         self._sesli_status_configure(t("🎤 Dinləyir…"), "#0E9F6E")
+        self._sesli_avatar_hal("listening")
 
         SR = 16000
         BLOK = 1600          # 0.1s @ 16kHz
@@ -5485,6 +6487,7 @@ class DentalApp(ctk.CTk):
         if son is None:
             self.after(2500, lambda: self._sesli_status_configure(t("🎤 Dinləyir…"), "#0E9F6E"))
             return
+        self._sesli_avatar_de(t("👂 Dinləyirəm…"), 1800)
         emr_metni = text[son:].strip(" ,.:;!?-")
         if not emr_metni:
             self._sesli_status_configure(t("🎤 Dinləyir… (əmr gözlənilir)"), "#0E9F6E")
@@ -5493,11 +6496,20 @@ class DentalApp(ctk.CTk):
         aktif_adi = None
         if self.aktif_hid and self.aktif_hid in self.hastalar:
             aktif_adi = self.hastalar[self.aktif_hid].get("ad")
-        netice = parse_sesli_emr(emr_metni, self.hastalar, aktif_hasta_adi=aktif_adi)
+        netice = None
+        api_key = (AYARLAR.get("anthropic_api_key") or "").strip()
+        if api_key:
+            try:
+                netice = _claude_parse_emr(emr_metni, self.hastalar, aktif_adi, api_key)
+            except Exception as e:
+                print(f"[Sesli] Claude AI təhlili uğursuz, yerli təhlilə keçilir: {e}")
+        if netice is None:
+            netice = parse_sesli_emr(emr_metni, self.hastalar, aktif_hasta_adi=aktif_adi)
         if not netice:
             self._sesli_status_configure(t("🎤 Anlaşılmadı"), "#C0392B")
             self.after(2500, lambda: self._sesli_status_configure(t("🎤 Dinləyir…"), "#0E9F6E"))
             return
+        self._sesli_avatar_de(_netice_qisa_metn(netice), 3500)
         self.after(0, lambda: self._sesli_konfirm_dialog(netice))
 
     def _sesli_konfirm_dialog(self, netice):
@@ -5585,6 +6597,7 @@ class DentalApp(ctk.CTk):
 
         def _tesdiq():
             nonlocal hedef_hid
+            self._chat_pending_confirm = None
             if yeni_pasient:
                 hedef_hid, vid = self._sesli_yeni_pasient_yarat(soylenen_ad)
                 self._yukle(hedef_hid, vid)
@@ -5594,10 +6607,13 @@ class DentalApp(ctk.CTk):
             metod = getattr(self, _SESLI_TAB_METOD[tab])
             for n in dis_nolari:
                 metod(n, None)
+            self._sesli_avatar_de(t("✓ Oldu!"), 1800)
             try: dlg.destroy()
             except Exception: pass
 
         def _legv():
+            self._chat_pending_confirm = None
+            self._sesli_avatar_de(t("Ləğv edildi"), 1500)
             try: dlg.destroy()
             except Exception: pass
 
@@ -5609,6 +6625,7 @@ class DentalApp(ctk.CTk):
         ctk.CTkButton(btn_row, text=t("İmtina"), width=110, height=34, corner_radius=10,
                       fg_color="transparent", border_width=1, border_color=TH["accent_soft"],
                       text_color=TH["accent"], command=_legv).pack(side="left", padx=6)
+        self._chat_pending_confirm = {"tesdiq": _tesdiq, "legv": _legv}
 
     def _sesli_randevu_dialog(self, netice):
         xeste_adi = netice["xeste_adi"]
@@ -5635,6 +6652,7 @@ class DentalApp(ctk.CTk):
 
         def _tesdiq():
             nonlocal eslesen_hid
+            self._chat_pending_confirm = None
             if yeni_pasient:
                 eslesen_hid, _vid = self._sesli_yeni_pasient_yarat(xeste_adi)
             rid2 = yeni_id("randevu")
@@ -5648,10 +6666,13 @@ class DentalApp(ctk.CTk):
                 "status": "gozleyir",
             }
             randevu_kaydet(self.randevular)
+            self._sesli_avatar_de(t("✓ Oldu!"), 1800)
             try: dlg.destroy()
             except Exception: pass
 
         def _legv():
+            self._chat_pending_confirm = None
+            self._sesli_avatar_de(t("Ləğv edildi"), 1500)
             try: dlg.destroy()
             except Exception: pass
 
@@ -5663,6 +6684,228 @@ class DentalApp(ctk.CTk):
         ctk.CTkButton(btn_row, text=t("İmtina"), width=110, height=34, corner_radius=10,
                       fg_color="transparent", border_width=1, border_color=TH["accent_soft"],
                       text_color=TH["accent"], command=_legv).pack(side="left", padx=6)
+        # Ümumi çat rejimində (əgər bu dialoq ordan açılıbsa) növbəti push-to-talk
+        # cavabında "bəli/xeyr" deyiləndə birbaşa bu closure-ları çağırmaq üçün:
+        self._chat_pending_confirm = {"tesdiq": _tesdiq, "legv": _legv}
+
+    # ── ÜMUMİ AI SÖHBƏTİ (push-to-talk, F9) — wake-word sistemindən MÜSTƏQİL ────
+    def _chat_hazir_metni(self):
+        return f"{t('Hazır')} — {chat_hotkey().upper()} {t('basılı saxla, danışın')}"
+
+    def _chat_baslat(self):
+        if self._chat_hotkey_qeydli:
+            return
+        try:
+            import keyboard, sounddevice  # noqa: F401 — mövcudluq yoxlaması
+        except Exception as e:
+            print(f"[Chat] modul yüklənmədi (keyboard/sounddevice): {e}")
+            return
+        self._chat_pencere_yarat()
+        self._chat_hotkey_qeydiyyat()
+
+    def _chat_dayandir(self):
+        self._chat_hotkey_sil()
+        if self._chat_ptt_aktiv:
+            self._chat_ptt_burax()
+        win = self._chat_win
+        if win is not None:
+            try: win.withdraw()
+            except Exception: pass
+
+    def _chat_hotkey_qeydiyyat(self):
+        try:
+            import keyboard
+            key = chat_hotkey()
+            keyboard.on_press_key(key, lambda e: self.after(0, self._chat_ptt_bas))
+            keyboard.on_release_key(key, lambda e: self.after(0, self._chat_ptt_burax))
+            self._chat_hotkey_qeydli = key
+        except Exception as e:
+            print(f"[Chat] hotkey qeydiyyatı uğursuz: {e}")
+            self._chat_hotkey_qeydli = None
+
+    def _chat_hotkey_sil(self):
+        if self._chat_hotkey_qeydli:
+            try:
+                import keyboard
+                keyboard.unhook_all()
+            except Exception:
+                pass
+            self._chat_hotkey_qeydli = None
+
+    def _chat_pencere_yarat(self):
+        win = self._chat_win
+        if win is not None and win.winfo_exists():
+            try:
+                win.deiconify()
+                win.lift()
+            except Exception:
+                pass
+            return
+        win = ctk.CTkToplevel(self, fg_color=TH["bg"])
+        win.title(t("AI Söhbət"))
+        win.geometry("360x480")
+        win.attributes("-topmost", True)
+        win.protocol("WM_DELETE_WINDOW", win.withdraw)
+        self._chat_scroll = ctk.CTkScrollableFrame(win, fg_color="transparent")
+        self._chat_scroll.pack(fill="both", expand=True, padx=8, pady=(8, 4))
+        self._chat_status_lbl = ctk.CTkLabel(win, text=self._chat_hazir_metni(),
+                                              font=ctk.CTkFont(size=11), text_color=TH["txt_sub"])
+        self._chat_status_lbl.pack(pady=(0, 8))
+        self._chat_win = win
+
+    def _chat_status_configure(self, text):
+        try:
+            self._chat_status_lbl.configure(text=text)
+        except Exception:
+            pass
+
+    def _chat_mesaj_goster(self, kim, metin):
+        """kim: 'user' və ya 'ai' — çat pəncərəsinə mesaj qabarcığı əlavə edir."""
+        if self._chat_win is None or not self._chat_win.winfo_exists():
+            self._chat_pencere_yarat()
+        try:
+            sag = (kim == "user")
+            bubble = ctk.CTkFrame(self._chat_scroll,
+                                   fg_color=(TH["accent"] if sag else TH["sidebar_row"]),
+                                   corner_radius=12)
+            bubble.pack(anchor="e" if sag else "w", padx=8, pady=4)
+            ctk.CTkLabel(bubble, text=metin, font=ctk.CTkFont(size=12),
+                         text_color=("white" if sag else TH["txt"]), wraplength=260,
+                         justify="left").pack(padx=10, pady=8)
+        except Exception as e:
+            print(f"[Chat] mesaj göstərilmədi: {e}")
+
+    def _chat_ptt_bas(self):
+        if self._chat_ptt_aktiv:
+            return  # düymə basılı saxlanarkən OS-un təkrar "press" eventləri
+        self._tts_stop_event.set()   # davam edən TTS-i dərhal kəs (bənd 4)
+        self._tts_stop_event = threading.Event()
+        try:
+            import sounddevice as sd
+        except Exception as e:
+            print(f"[Chat] sounddevice yoxdur: {e}")
+            return
+        self._chat_ptt_buffer = []
+
+        def callback(indata, frames, time_info, status):
+            self._chat_ptt_buffer.append(indata[:, 0].copy())
+
+        try:
+            stream = sd.InputStream(samplerate=16000, channels=1, dtype="float32",
+                                     blocksize=1600, callback=callback)
+            stream.start()
+        except Exception as e:
+            print(f"[Chat] mikrofon açılmadı: {e}")
+            self._chat_status_configure(t("Mikrofon xətası"))
+            return
+        self._chat_ptt_stream = stream
+        self._chat_ptt_aktiv = True
+        self._chat_status_configure(t("🎤 Dinləyirəm…"))
+        self._sesli_avatar_yarat()
+        self._sesli_avatar_hal("listening")
+
+    def _chat_ptt_burax(self):
+        if not self._chat_ptt_aktiv:
+            return
+        self._chat_ptt_aktiv = False
+        stream = self._chat_ptt_stream
+        self._chat_ptt_stream = None
+        try:
+            if stream is not None:
+                stream.stop(); stream.close()
+        except Exception:
+            pass
+        buf = self._chat_ptt_buffer
+        self._chat_ptt_buffer = []
+        if not buf:
+            self._chat_status_configure(self._chat_hazir_metni())
+            return
+        import numpy as _np
+        audio = _np.concatenate(buf)
+        self._chat_status_configure(t("⏳ Fikirləşirəm…"))
+        threading.Thread(target=self._chat_ptt_isle, args=(audio,), daemon=True).start()
+
+    def _chat_ptt_isle(self, audio):
+        """Arxa-plan thread-də: transkripsiya → (gözlənilən təsdiq varsa onu
+        həll et) → Claude-a göndər → nəticəni (mətn və ya alət-təklifi) göstər.
+        Bütün UI toxunuşları `self.after(0, …)` ilə marşrutlanır."""
+        import numpy as _np
+        try:
+            model = _whisper_model_yukle()
+        except Exception as e:
+            print(f"[Chat] whisper model: {e}")
+            self.after(0, lambda: self._chat_status_configure(self._chat_hazir_metni()))
+            return
+        if len(audio) / 16000.0 < 0.3:
+            self.after(0, lambda: self._chat_status_configure(self._chat_hazir_metni()))
+            return
+        ipucu = ("kanal, dolğu, qapaq, çəkim, implant, əksik, gözləm, randevu, "
+                  "saat, sabah, bu gün, bəli, xeyr, ləğv et.")
+        try:
+            segments, _info = model.transcribe(audio, language="az", vad_filter=True,
+                                                 initial_prompt=ipucu)
+            text = " ".join(seg.text for seg in segments).strip()
+        except Exception as e:
+            print(f"[Chat] transkripsiya xetasi: {e}")
+            self.after(0, lambda: self._chat_status_configure(self._chat_hazir_metni()))
+            return
+        if not text:
+            self.after(0, lambda: self._chat_status_configure(self._chat_hazir_metni()))
+            return
+        self.after(0, lambda: self._chat_mesaj_goster("user", text))
+
+        pending = self._chat_pending_confirm
+        if pending:
+            qerar = _chat_tesdiq_xeyr_yoxla(text)
+            if qerar == "tesdiq":
+                self.after(0, pending["tesdiq"])
+                self.after(0, lambda: self._chat_status_configure(self._chat_hazir_metni()))
+                return
+            if qerar == "legv":
+                self.after(0, pending["legv"])
+                self.after(0, lambda: self._chat_status_configure(self._chat_hazir_metni()))
+                return
+
+        api_key = (AYARLAR.get("anthropic_api_key") or "").strip()
+        if not api_key:
+            self.after(0, lambda: self._chat_mesaj_goster(
+                "ai", t("Anthropic API açarı Ayarlar-da daxil edilməyib.")))
+            self.after(0, lambda: self._chat_status_configure(self._chat_hazir_metni()))
+            return
+
+        aktif_adi = None
+        if self.aktif_hid and self.aktif_hid in self.hastalar:
+            aktif_adi = self.hastalar[self.aktif_hid].get("ad")
+        try:
+            novu, deyer = _claude_chat_cavab(text, self.hastalar, aktif_adi, api_key, self._chat_tarixce)
+        except Exception as e:
+            print(f"[Chat] Claude xetasi: {e}")
+            self.after(0, lambda: self._chat_mesaj_goster("ai", t("Claude-a qoşulmaq alınmadı.")))
+            self.after(0, lambda: self._chat_status_configure(self._chat_hazir_metni()))
+            return
+
+        self._chat_tarixce.append({"role": "user", "content": text})
+        tts_event = self._tts_stop_event
+        if novu == "tool":
+            netice = deyer
+            qisa = _netice_qisa_metn(netice) + " " + t("(bəli/xeyr?)")
+            self._chat_tarixce.append({"role": "assistant", "content": f"[{t('əməliyyat təklif edildi')}]"})
+            self.after(0, lambda: self._chat_mesaj_goster("ai", qisa))
+            self.after(0, lambda: self._sesli_avatar_de(qisa, 3000))
+            self.after(0, lambda: self._sesli_konfirm_dialog(netice))
+            self.after(0, lambda: self._chat_status_configure(t("🔊 Danışır…")))
+            _tts_de(qisa, tts_event)
+        else:
+            metin = deyer
+            self._chat_tarixce.append({"role": "assistant", "content": metin})
+            self.after(0, lambda: self._chat_mesaj_goster("ai", metin))
+            self.after(0, lambda: self._sesli_avatar_de(metin[:60], 2500))
+            self.after(0, lambda: self._chat_status_configure(t("🔊 Danışır…")))
+            _tts_de(metin, tts_event)
+        del self._chat_tarixce[:-10]
+        if not (self._sesli_thread and self._sesli_thread.is_alive()):
+            self.after(0, lambda: self._sesli_avatar_hal("idle"))
+        self.after(0, lambda: self._chat_status_configure(self._chat_hazir_metni()))
 
     def _on_close(self):
         """Stop background watcher thread before destroying the window."""
@@ -5670,6 +6913,7 @@ class DentalApp(ctk.CTk):
             self._xray_observer.stop()
             self._xray_observer.join(timeout=2)
         self._sesli_dayandir()
+        self._chat_hotkey_sil()
         self.destroy()
 
 

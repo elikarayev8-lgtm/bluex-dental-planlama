@@ -6,7 +6,12 @@ database.txt
 debug_output.txt
 HastaYedekleri/
 dcm_cache/
+raw_cache/
+cache_img/
 base/
+backup_hastalar_cloud_*.json
+migrated_hastalar.json
+whisper_models/
 
 # Derleme çıktıları (Release'e ayrı yüklenir, git geçmişine gömülmez)
 build/
