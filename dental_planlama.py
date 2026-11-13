@@ -5,6 +5,7 @@ from PIL import Image, ImageDraw, ImageTk, ImageFilter, ImageFont, ImageChops
 from io import BytesIO
 import json, os, math, base64, numpy as np, threading, queue, time, uuid, copy, shutil, hashlib, re, difflib
 from datetime import datetime, date, timedelta
+from collections import Counter
 
 # ── X-ray folder watcher (watchdog) ─────────────────────────────────────────
 try:
@@ -444,6 +445,38 @@ TRANSLATIONS = {
     "Okt": {"en": "Oct", "ru": "Окт", "tr": "Eki"},
     "Noy": {"en": "Nov", "ru": "Ноя", "tr": "Kas"},
     "Dek": {"en": "Dec", "ru": "Дек", "tr": "Ara"},
+
+    "Cinsiyət": {"en": "Gender", "ru": "Пол", "tr": "Cinsiyet"},
+    "Kişi": {"en": "Male", "ru": "Мужской", "tr": "Erkek"},
+    "Qadın": {"en": "Female", "ru": "Женский", "tr": "Kadın"},
+    "Şəhər": {"en": "City", "ru": "Город", "tr": "Şehir"},
+    "📊  Statistika": {"en": "📊  Statistics", "ru": "📊  Статистика", "tr": "📊  İstatistik"},
+    "Statistika": {"en": "Statistics", "ru": "Статистика", "tr": "İstatistik"},
+    "📊 Ümumi Məlumat": {"en": "📊 General Info", "ru": "📊 Общая информация", "tr": "📊 Genel Bilgi"},
+    "Toplam Pasient": {"en": "Total Patients", "ru": "Всего пациентов", "tr": "Toplam Hasta"},
+    "Cinsiyəti Qeyd Olunmayan": {"en": "Gender Not Recorded", "ru": "Пол не указан", "tr": "Cinsiyeti Belirtilmemiş"},
+    "🦷 Çürük Analizi — Boşluq Yerləşməsi": {
+        "en": "🦷 Cavity Analysis — Surface Location",
+        "ru": "🦷 Анализ кариеса — расположение по поверхности",
+        "tr": "🦷 Çürük Analizi — Yüzey Konumu"},
+    "🦴 Diş Çəkimi Statistikası": {
+        "en": "🦴 Tooth Extraction Statistics",
+        "ru": "🦴 Статистика удаления зубов",
+        "tr": "🦴 Diş Çekimi İstatistiği"},
+    "📍 Şəhərə Görə Statistika": {
+        "en": "📍 Statistics by City", "ru": "📍 Статистика по городам", "tr": "📍 Şehre Göre İstatistik"},
+    "⚥ Cinsiyətə Görə Statistika": {
+        "en": "⚥ Statistics by Gender", "ru": "⚥ Статистика по полу", "tr": "⚥ Cinsiyete Göre İstatistik"},
+    "Şəhər:": {"en": "City:", "ru": "Город:", "tr": "Şehir:"},
+    "pasient": {"en": "patients", "ru": "пациентов", "tr": "hasta"},
+    "Çəkim sayı": {"en": "Extraction count", "ru": "Количество удалений", "tr": "Çekim sayısı"},
+    "Çürük qeydi yoxdur.": {"en": "No cavities recorded.", "ru": "Нет данных о кариесе.", "tr": "Çürük kaydı yok."},
+    "Çəkim qeydi yoxdur.": {"en": "No extractions recorded.", "ru": "Нет данных об удалении.", "tr": "Çekim kaydı yok."},
+    "Şəhər məlumatı qeyd olunmayıb.": {
+        "en": "No city information recorded.", "ru": "Информация о городе не указана.", "tr": "Şehir bilgisi girilmemiş."},
+    "Bu şəhər üçün çürük qeydi yoxdur.": {
+        "en": "No cavity records for this city.", "ru": "Нет данных о кариесе для этого города.",
+        "tr": "Bu şehir için çürük kaydı yok."},
 }
 
 # hər dildəki mətndən (az/en/ru/tr — hansı hazırda ekranda olur-olsun) eyni girişə
@@ -985,6 +1018,8 @@ TEDAVILER = [
     ("gozlem",  "Gözləm",   (255, 140, 0  )),
 ]
 T_COLOR = {t[0]: t[2] for t in TEDAVILER}
+
+CINSIYET_SECENEKLERI = [("", "—"), ("kisi", "Kişi"), ("qadin", "Qadın")]
 
 # ── SƏSLİ ASİSTENT — mətn təhlili (mikrofon/modeldən asılı olmayan xalis funksiyalar) ──
 # "Plan" tabındakı düymə dəstinin eynisi (bax _tbar: tab="plan" skip şərtləri) — kok/curuk
@@ -2187,6 +2222,99 @@ def _m_chip(d, x, ycen, name, col, cnt):
     d.text((tx + wname + 5 * K * S, ycen * S), ctext, font=F_MLEG, fill=(140, 162, 196), anchor="lm")
     return w
 
+# ── STATİSTİKA — PIL ilə sadə diaqram çəkmə köməkçiləri ──────────────────────
+def _sfont(sz, bold=False):
+    try:
+        return ImageFont.truetype(
+            "C:/Windows/Fonts/segoeui%s.ttf" % ("b" if bold else ""), sz)
+    except OSError:
+        return ImageFont.load_default()
+
+_SF_LBL  = _sfont(13)
+_SF_LBLB = _sfont(13, True)
+_SF_VAL  = _sfont(12, True)
+
+STAT_RENG_KISI  = (47, 127, 242)   # TH accent — Kişi
+STAT_RENG_QADIN = (242, 87, 127)   # Qadın (mavi ilə aydın ayrılan isti ton)
+STAT_RENG_CURUK = (150, 94, 44)
+STAT_RENG_CEKIM = (211, 68, 63)
+
+def _stat_bar_chart(items, color, width=720, bar_h=26, gap=10,
+                     left_pad=90, right_pad=60, top_pad=6, max_val=None):
+    """items: [(etiket, deger), ...] — üfüqi çəki çubuqları. Boşdursa None qaytarır."""
+    if not items:
+        return None
+    max_val = max_val or max((v for _, v in items), default=1) or 1
+    probe = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    needed = max((probe.textlength(str(lbl), font=_SF_LBLB) for lbl, _ in items), default=0)
+    left_pad = max(left_pad, int(needed) + 20)
+    h = top_pad * 2 + len(items) * (bar_h + gap) - gap
+    img = Image.new("RGBA", (width, max(h, 1)), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    track_w = max(10, width - left_pad - right_pad)
+    for i, (lbl, val) in enumerate(items):
+        y0 = top_pad + i * (bar_h + gap)
+        y1 = y0 + bar_h
+        ym = (y0 + y1) / 2
+        d.text((left_pad - 10, ym), str(lbl), font=_SF_LBLB, fill=(232, 237, 245), anchor="rm")
+        d.rounded_rectangle((left_pad, y0, left_pad + track_w, y1),
+                             radius=bar_h / 2, fill=(26, 34, 51))
+        bw = max(6, track_w * (val / max_val)) if val else 0
+        if bw:
+            d.rounded_rectangle((left_pad, y0, left_pad + bw, y1), radius=bar_h / 2, fill=color)
+        d.text((left_pad + track_w + 10, ym), str(val), font=_SF_VAL, fill=(232, 237, 245), anchor="lm")
+    return img
+
+def _stat_grouped_chart(categories, series, width=720, bar_h=20, gap_in=7, gap_out=18,
+                         left_pad=130, right_pad=60, top_pad=6, max_val=None):
+    """categories: [etiket,...]; series: [(ad, reng, {etiket: deger}), ...]."""
+    if not categories or not series:
+        return None
+    vals = [s[2].get(c, 0) for s in series for c in categories]
+    max_val = max_val or max(vals, default=1) or 1
+    probe = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    needed = max((probe.textlength(str(c), font=_SF_LBLB) for c in categories), default=0)
+    left_pad = max(left_pad, int(needed) + 20)
+    group_h = bar_h * len(series) + gap_in * (len(series) - 1)
+    h = top_pad * 2 + len(categories) * (group_h + gap_out) - gap_out
+    img = Image.new("RGBA", (width, max(h, 1)), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    track_w = max(10, width - left_pad - right_pad)
+    for i, cat in enumerate(categories):
+        gy0 = top_pad + i * (group_h + gap_out)
+        d.text((left_pad - 10, gy0 + group_h / 2), str(cat), font=_SF_LBLB,
+               fill=(232, 237, 245), anchor="rm")
+        for j, (_name, color, data) in enumerate(series):
+            y0 = gy0 + j * (bar_h + gap_in)
+            y1 = y0 + bar_h
+            val = data.get(cat, 0)
+            d.rounded_rectangle((left_pad, y0, left_pad + track_w, y1),
+                                 radius=bar_h / 2, fill=(26, 34, 51))
+            bw = max(4, track_w * (val / max_val)) if val else 0
+            if bw:
+                d.rounded_rectangle((left_pad, y0, left_pad + bw, y1), radius=bar_h / 2, fill=color)
+            d.text((left_pad + track_w + 10, (y0 + y1) / 2), str(val), font=_SF_VAL,
+                   fill=(232, 237, 245), anchor="lm")
+    return img
+
+def _stat_legend_img(items, h=24, gap=22):
+    """items: [(ad, reng), ...] — üfüqi rəng-nöqtəli lejant."""
+    d0 = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    x = 4
+    widths = []
+    for name, _c in items:
+        w = 12 + 6 + d0.textlength(name, font=_SF_LBL)
+        widths.append(w)
+    total_w = int(sum(widths) + gap * len(items) + 8)
+    img = Image.new("RGBA", (total_w, h), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    x = 4
+    for (name, color), w in zip(items, widths):
+        d.ellipse((x, h / 2 - 6, x + 12, h / 2 + 6), fill=color)
+        d.text((x + 18, h / 2), name, font=_SF_LBL, fill=(232, 237, 245), anchor="lm")
+        x += w + gap
+    return img
+
 def get_map_photo(tedaviler, dis_tasi=False, secili=None, band_lbl="Diş Daşı Təmizliyi",
                   ilkin=False, secili_cok=None):
     S = _MS
@@ -2637,7 +2765,7 @@ class DentalApp(ctk.CTk):
 
         sol = ctk.CTkFrame(self,width=240,corner_radius=0,fg_color=TH["sidebar"])
         sol.grid(row=0,column=0,sticky="nsew"); sol.grid_propagate(False)
-        sol.grid_rowconfigure(5,weight=1); sol.grid_columnconfigure(0,weight=1)
+        sol.grid_rowconfigure(6,weight=1); sol.grid_columnconfigure(0,weight=1)
         ctk.CTkLabel(sol,text=t("🦷  P A S İ E N T L Ə R"),font=ctk.CTkFont(size=13,weight="bold"),
                      text_color=TH["txt_faint"]).grid(row=0,column=0,padx=14,pady=(20,10),sticky="w")
         ctk.CTkButton(sol,text=t("+  Yeni Pasient"),height=38,corner_radius=10,
@@ -2648,30 +2776,34 @@ class DentalApp(ctk.CTk):
                       fg_color=TH["indigo"],hover_color=TH["indigo_hover"],
                       font=ctk.CTkFont(size=13,weight="bold"),
                       command=self._randevu_ac).grid(row=2,column=0,padx=10,pady=(0,6),sticky="ew")
+        ctk.CTkButton(sol,text=t("📊  Statistika"),height=38,corner_radius=10,
+                      fg_color=TH["ok"],hover_color=TH["ok_hover"],
+                      font=ctk.CTkFont(size=13,weight="bold"),
+                      command=self._statistika_ac).grid(row=3,column=0,padx=10,pady=(0,6),sticky="ew")
         ctk.CTkButton(sol,text=t("📂  Pasient Yükle (.bxd)"),height=34,corner_radius=10,
                       fg_color="transparent",border_width=1,border_color="#3B5E8F",
                       text_color="#B9CDEB",hover_color=TH["sidebar_row"],
-                      command=self._hasta_yukle).grid(row=3,column=0,padx=10,pady=(0,10),sticky="ew")
+                      command=self._hasta_yukle).grid(row=4,column=0,padx=10,pady=(0,10),sticky="ew")
         arama_f = ctk.CTkFrame(sol,fg_color="transparent")
-        arama_f.grid(row=4,column=0,padx=10,pady=(0,6),sticky="ew")
+        arama_f.grid(row=5,column=0,padx=10,pady=(0,6),sticky="ew")
         arama_f.grid_columnconfigure(0,weight=1)
         ctk.CTkEntry(arama_f,textvariable=self.hasta_arama_var,
                      placeholder_text=t("🔍 Hasta axtar…"),height=32,corner_radius=8,
                      border_color=TH["accent_soft"],fg_color=TH["sidebar_row"],
                      text_color="white").grid(row=0,column=0,sticky="ew")
         self.scroll = ctk.CTkScrollableFrame(sol,fg_color="transparent")
-        self.scroll.grid(row=5,column=0,padx=4,pady=4,sticky="nsew")
+        self.scroll.grid(row=6,column=0,padx=4,pady=4,sticky="nsew")
         ctk.CTkButton(sol,text=t("⚙  Ayarlar"),height=32,corner_radius=10,
                       fg_color="transparent",border_width=1,border_color="#3B5E8F",
                       text_color="#B9CDEB",hover_color=TH["sidebar_row"],
-                      command=self._ayarlar_ac).grid(row=6,column=0,padx=10,pady=(4,4),sticky="ew")
+                      command=self._ayarlar_ac).grid(row=7,column=0,padx=10,pady=(4,4),sticky="ew")
         self.cloud_status_lbl = ctk.CTkLabel(sol,text="",font=ctk.CTkFont(size=10),
                                              text_color="#7A99C4")
-        self.cloud_status_lbl.grid(row=7,column=0,padx=12,pady=(0,2),sticky="w")
+        self.cloud_status_lbl.grid(row=8,column=0,padx=12,pady=(0,2),sticky="w")
         self._cloud_status_guncelle()
         self.sesli_status_lbl = ctk.CTkLabel(sol,text="",font=ctk.CTkFont(size=10),
                                              text_color="#7A99C4")
-        self.sesli_status_lbl.grid(row=8,column=0,padx=12,pady=(0,10),sticky="w")
+        self.sesli_status_lbl.grid(row=9,column=0,padx=12,pady=(0,10),sticky="w")
 
         self.sag = ctk.CTkFrame(self,fg_color=TH["bg"],corner_radius=0)
         self.sag.grid(row=0,column=1,sticky="nsew")
@@ -2783,7 +2915,7 @@ class DentalApp(ctk.CTk):
         self.p0.grid_rowconfigure(1,weight=1)
         form = ctk.CTkFrame(self.p0,fg_color=TH["panel"],corner_radius=12)
         form.grid(row=0,column=0,sticky="ew",padx=8,pady=(6,4))
-        form.grid_columnconfigure((0,1,2,3,4),weight=1)
+        form.grid_columnconfigure((0,1,2,3,4,5,6),weight=1)
         for i,(lbl,attr) in enumerate([("Ad Soyad","p0_ad"),("Yaş","p0_yas"),
                 ("Telefon","p0_tel"),("TC/ID","p0_tc"),("Qeyd","p0_not")]):
             lbl = t(lbl)
@@ -2793,10 +2925,24 @@ class DentalApp(ctk.CTk):
                            border_color=TH["accent_soft"],fg_color=TH["panel_soft"])
             e.grid(row=1,column=i,padx=8,pady=(0,8),sticky="ew")
             setattr(self,attr,e)
+        ctk.CTkLabel(form,text=t("Cinsiyət"),font=ctk.CTkFont(size=11,weight="bold"),
+                     text_color=TH["txt_sub"]).grid(row=0,column=5,padx=8,pady=(8,2),sticky="w")
+        self.p0_cinsiyet_var = tk.StringVar(value=t("—"))
+        self.p0_cinsiyet = ctk.CTkOptionMenu(form, variable=self.p0_cinsiyet_var,
+                values=[t(l) for _,l in CINSIYET_SECENEKLERI],
+                height=32, corner_radius=8,
+                fg_color=TH["panel_soft"], button_color=TH["accent"],
+                button_hover_color=TH["accent_hover"])
+        self.p0_cinsiyet.grid(row=1,column=5,padx=8,pady=(0,8),sticky="ew")
+        ctk.CTkLabel(form,text=t("Şəhər"),font=ctk.CTkFont(size=11,weight="bold"),
+                     text_color=TH["txt_sub"]).grid(row=0,column=6,padx=8,pady=(8,2),sticky="w")
+        self.p0_sheher=ctk.CTkEntry(form,placeholder_text=t("Şəhər"),height=32,corner_radius=8,
+                       border_color=TH["accent_soft"],fg_color=TH["panel_soft"])
+        self.p0_sheher.grid(row=1,column=6,padx=8,pady=(0,8),sticky="ew")
         kb=ctk.CTkButton(form,text=t("💾 Saxla"),width=90,height=32,corner_radius=8,
                           fg_color=TH["accent"],hover_color=TH["accent_hover"],
                           font=ctk.CTkFont(size=12,weight="bold"),command=self._kaydet)
-        kb.grid(row=1,column=5,padx=8,pady=(0,8)); self.p0_kaydet=kb
+        kb.grid(row=1,column=7,padx=8,pady=(0,8)); self.p0_kaydet=kb
 
         content=ctk.CTkFrame(self.p0,fg_color="transparent")
         content.grid(row=1,column=0,sticky="nsew",padx=4,pady=4)
@@ -3721,6 +3867,9 @@ class DentalApp(ctk.CTk):
         for attr,key in [("p0_ad","ad"),("p0_yas","yas"),
                           ("p0_tel","tel"),("p0_tc","tc"),("p0_not","notlar_genel")]:
             h[key]=getattr(self,attr).get()
+        secili_cins = self.p0_cinsiyet_var.get()
+        h["cinsiyet"] = next((k for k,l in CINSIYET_SECENEKLERI if t(l)==secili_cins), "")
+        h["sheher"] = self.p0_sheher.get().strip()
         veri_kaydet(self.hastalar)
         self._lista_guncelle()
         self.kart_lbl.configure(text=h.get("ad",""))
@@ -3772,6 +3921,8 @@ class DentalApp(ctk.CTk):
         for attr,key in [("p0_ad","ad"),("p0_yas","yas"),
                           ("p0_tel","tel"),("p0_tc","tc"),("p0_not","notlar_genel")]:
             e=getattr(self,attr); e.delete(0,"end"); e.insert(0,h.get(key,""))
+        self.p0_cinsiyet_var.set(t(dict(CINSIYET_SECENEKLERI).get(h.get("cinsiyet",""), "—")))
+        self.p0_sheher.delete(0,"end"); self.p0_sheher.insert(0,h.get("sheher",""))
         vaka = vakalar.get(vid, {})
         plan_data   = {str(k): v for k,v in vaka.get("plan",   {}).items()}
         tedavi_data = {str(k): v for k,v in vaka.get("tedavi", {}).items()}
@@ -5664,6 +5815,188 @@ class DentalApp(ctk.CTk):
         self.after(100, lambda: self._yukle(hid=new_hid))
         tkinter.messagebox.showinfo(t("Yüklendi"),
                                     f"'{h.get('ad', '')}' hastası başarıyla yüklendi.")
+
+    # ── Statistika ────────────────────────────────────────────────────────────
+    def _statistika_hesabla(self):
+        """Bütün pasientlər üzrə (bütün vakalar daxil) statistik məlumatları toplayır."""
+        surf_all    = Counter()
+        surf_city   = {}
+        surf_gender = {"kisi": Counter(), "qadin": Counter()}
+        cekim_tooth  = Counter()
+        cekim_gender = {"kisi": Counter(), "qadin": Counter()}
+        patient_gender = Counter()
+        patient_city   = Counter()
+
+        for h in self.hastalar.values():
+            cins = h.get("cinsiyet", "") or ""
+            sheher = (h.get("sheher", "") or "").strip()
+            patient_gender[cins or "bilinmir"] += 1
+            if sheher:
+                patient_city[sheher] += 1
+            for vaka in h.get("vakalar", {}).values():
+                for n_str, durum in vaka.get("ilkin", {}).items():
+                    ns = normalize_state(durum)
+                    for y in ns["curuk"]:
+                        surf_all[y] += 1
+                        if sheher:
+                            surf_city.setdefault(sheher, Counter())[y] += 1
+                        if cins in surf_gender:
+                            surf_gender[cins][y] += 1
+                for n_str, durum in vaka.get("tedavi", {}).items():
+                    ns = normalize_state(durum)
+                    if ns["tac"] == "cekim":
+                        try: n = int(n_str)
+                        except (TypeError, ValueError): continue
+                        cekim_tooth[n] += 1
+                        if cins in cekim_gender:
+                            cekim_gender[cins][n] += 1
+        return {
+            "surf_all": surf_all, "surf_city": surf_city, "surf_gender": surf_gender,
+            "cekim_tooth": cekim_tooth, "cekim_gender": cekim_gender,
+            "patient_gender": patient_gender, "patient_city": patient_city,
+        }
+
+    def _statistika_ac(self):
+        stat = self._statistika_hesabla()
+        win = ctk.CTkToplevel(self, fg_color=TH["bg"])
+        win.title(t("Statistika"))
+        win.geometry("980x860")
+        win.after(50, lambda: win.state("zoomed"))
+        win.grid_columnconfigure(0, weight=1)
+        win.grid_rowconfigure(0, weight=1)
+
+        scroll = ctk.CTkScrollableFrame(win, fg_color=TH["bg"])
+        scroll.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+
+        def _basliq(text):
+            ctk.CTkLabel(scroll, text=text, font=ctk.CTkFont(size=16, weight="bold"),
+                         text_color=TH["accent"]).pack(anchor="w", padx=4, pady=(18, 6))
+
+        def _kart():
+            f = ctk.CTkFrame(scroll, fg_color=TH["panel"], corner_radius=12)
+            f.pack(fill="x", padx=4, pady=4)
+            return f
+
+        def _img_goster(parent, pil_img, bosmsg, pad=(16, 12)):
+            if pil_img is None:
+                ctk.CTkLabel(parent, text=bosmsg, font=ctk.CTkFont(size=12),
+                             text_color=TH["txt_faint"]).pack(padx=16, pady=16, anchor="w")
+                return
+            photo = ImageTk.PhotoImage(pil_img)
+            lbl = tk.Label(parent, image=photo, bg=TH["panel"], borderwidth=0)
+            lbl.image = photo
+            lbl.pack(padx=pad[0], pady=pad[1], anchor="w")
+
+        def _yuz_lbl(y):
+            return f"{y} ({YUZEY_AD.get(y, y)})"
+
+        # ── Ümumi məlumat ──
+        _basliq(t("📊 Ümumi Məlumat"))
+        umumi = _kart()
+        toplam = len(self.hastalar)
+        kisi_n = stat["patient_gender"].get("kisi", 0)
+        qadin_n = stat["patient_gender"].get("qadin", 0)
+        bilinmir_n = stat["patient_gender"].get("bilinmir", 0)
+        tiles = ctk.CTkFrame(umumi, fg_color="transparent")
+        tiles.pack(fill="x", padx=12, pady=12)
+        for lbl, val, color in [
+            (t("Toplam Pasient"), toplam, TH["accent"]),
+            (t("Kişi"), kisi_n, "#%02x%02x%02x" % STAT_RENG_KISI),
+            (t("Qadın"), qadin_n, "#%02x%02x%02x" % STAT_RENG_QADIN),
+            (t("Cinsiyəti Qeyd Olunmayan"), bilinmir_n, TH["txt_faint"]),
+        ]:
+            tile = ctk.CTkFrame(tiles, fg_color=TH["panel_soft"], corner_radius=10,
+                                 width=190, height=72)
+            tile.pack(side="left", padx=6)
+            tile.pack_propagate(False)
+            ctk.CTkLabel(tile, text=str(val), font=ctk.CTkFont(size=22, weight="bold"),
+                         text_color=color).pack(pady=(12, 0))
+            ctk.CTkLabel(tile, text=lbl, font=ctk.CTkFont(size=10),
+                         text_color=TH["txt_sub"]).pack()
+
+        # ── Çürük analizi (boşluq yerləşməsi) ──
+        _basliq(t("🦷 Çürük Analizi — Boşluq Yerləşməsi"))
+        curuk_f = _kart()
+        items = sorted(stat["surf_all"].items(), key=lambda x: -x[1])
+        items = [(_yuz_lbl(y), v) for y, v in items]
+        img = _stat_bar_chart(items, STAT_RENG_CURUK, width=720)
+        _img_goster(curuk_f, img, t("Çürük qeydi yoxdur."))
+
+        # ── Diş çəkimi statistikası ──
+        _basliq(t("🦴 Diş Çəkimi Statistikası"))
+        cekim_f = _kart()
+        top_cekim = sorted(stat["cekim_tooth"].items(), key=lambda x: -x[1])[:14]
+        items = [(str(n), v) for n, v in top_cekim]
+        img = _stat_bar_chart(items, STAT_RENG_CEKIM, width=720)
+        _img_goster(cekim_f, img, t("Çəkim qeydi yoxdur."))
+
+        # ── Şəhərə görə statistika ──
+        _basliq(t("📍 Şəhərə Görə Statistika"))
+        sheher_f = _kart()
+        sheherler = sorted(stat["surf_city"].keys())
+        if not sheherler:
+            ctk.CTkLabel(sheher_f, text=t("Şəhər məlumatı qeyd olunmayıb."),
+                         font=ctk.CTkFont(size=12),
+                         text_color=TH["txt_faint"]).pack(padx=16, pady=16, anchor="w")
+        else:
+            sec_f = ctk.CTkFrame(sheher_f, fg_color="transparent")
+            sec_f.pack(fill="x", padx=12, pady=(12, 0), anchor="w")
+            ctk.CTkLabel(sec_f, text=t("Şəhər:"), font=ctk.CTkFont(size=12, weight="bold"),
+                         text_color=TH["txt_sub"]).pack(side="left", padx=(0, 8))
+            sheher_var = tk.StringVar(value=sheherler[0])
+            chart_holder = ctk.CTkFrame(sheher_f, fg_color="transparent")
+            chart_holder.pack(fill="x", padx=4, pady=8, anchor="w")
+
+            def _sheher_render(*_):
+                for w in chart_holder.winfo_children(): w.destroy()
+                sh = sheher_var.get()
+                cnt = stat["surf_city"].get(sh, Counter())
+                toplam_sh = sum(cnt.values()) or 1
+                n_pasient = stat["patient_city"].get(sh, 0)
+                ctk.CTkLabel(chart_holder, text=f"{sh} — {n_pasient} {t('pasient')}",
+                             font=ctk.CTkFont(size=12, weight="bold"),
+                             text_color=TH["txt"]).pack(anchor="w", pady=(0, 6))
+                sh_items = sorted(cnt.items(), key=lambda x: -x[1])
+                sh_items = [(f"{_yuz_lbl(y)} — {round(100*v/toplam_sh)}%", v) for y, v in sh_items]
+                img2 = _stat_bar_chart(sh_items, STAT_RENG_CURUK, width=680, left_pad=210)
+                _img_goster(chart_holder, img2, t("Bu şəhər üçün çürük qeydi yoxdur."), pad=(0, 0))
+
+            ctk.CTkOptionMenu(sec_f, values=sheherler, variable=sheher_var,
+                              command=lambda _v: _sheher_render(),
+                              height=30, corner_radius=8,
+                              fg_color=TH["panel_soft"], button_color=TH["accent"],
+                              button_hover_color=TH["accent_hover"]).pack(side="left")
+            _sheher_render()
+
+        # ── Cinsiyətə görə statistika ──
+        _basliq(t("⚥ Cinsiyətə Görə Statistika"))
+        cins_f = _kart()
+        legend = _stat_legend_img([(t("Kişi"), STAT_RENG_KISI), (t("Qadın"), STAT_RENG_QADIN)])
+        legend_photo = ImageTk.PhotoImage(legend)
+        legend_lbl = tk.Label(cins_f, image=legend_photo, bg=TH["panel"], borderwidth=0)
+        legend_lbl.image = legend_photo
+        legend_lbl.pack(padx=16, pady=(14, 4), anchor="w")
+
+        all_surf = sorted(set(stat["surf_gender"]["kisi"]) | set(stat["surf_gender"]["qadin"]),
+                           key=lambda y: -(stat["surf_gender"]["kisi"].get(y, 0)
+                                           + stat["surf_gender"]["qadin"].get(y, 0)))
+        if all_surf:
+            cats = [_yuz_lbl(y) for y in all_surf]
+            series = [(t("Kişi"), STAT_RENG_KISI,
+                       {_yuz_lbl(y): stat["surf_gender"]["kisi"].get(y, 0) for y in all_surf}),
+                      (t("Qadın"), STAT_RENG_QADIN,
+                       {_yuz_lbl(y): stat["surf_gender"]["qadin"].get(y, 0) for y in all_surf})]
+            img3 = _stat_grouped_chart(cats, series, width=720)
+            _img_goster(cins_f, img3, t("Çürük qeydi yoxdur."))
+        else:
+            _img_goster(cins_f, None, t("Çürük qeydi yoxdur."))
+
+        ctk.CTkLabel(cins_f, text=t("Çəkim sayı"), font=ctk.CTkFont(size=12, weight="bold"),
+                     text_color=TH["txt_sub"]).pack(anchor="w", padx=16, pady=(4, 0))
+        cekim_items = [(t("Kişi"), sum(stat["cekim_gender"]["kisi"].values())),
+                       (t("Qadın"), sum(stat["cekim_gender"]["qadin"].values()))]
+        img4 = _stat_bar_chart(cekim_items, STAT_RENG_CEKIM, width=720, bar_h=28)
+        _img_goster(cins_f, img4, t("Çəkim qeydi yoxdur."))
 
     # ── X-ray folder watcher methods ─────────────────────────────────────────
 
