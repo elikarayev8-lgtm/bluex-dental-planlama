@@ -801,7 +801,7 @@ def sb_refresh(refresh_token):
 # bu mexanizm GitHub-a köçürülüb: hər yeni versiya GitHub Release olaraq
 # yükləndikdə (bax [[reference-bluex-github]] release axını) bu funksiya onu
 # avtomatik tapır, Supabase-dən asılılıq yoxdur.
-APP_VERSION = "1.2.10"
+APP_VERSION = "1.3.0"
 GITHUB_REPO = "elikarayev8-lgtm/bluex-dental-planlama"
 
 def _ver_tuple(s):
