@@ -477,6 +477,38 @@ TRANSLATIONS = {
     "Bu şəhər üçün çürük qeydi yoxdur.": {
         "en": "No cavity records for this city.", "ru": "Нет данных о кариесе для этого города.",
         "tr": "Bu şehir için çürük kaydı yok."},
+    "Filtrlər": {"en": "Filters", "ru": "Фильтры", "tr": "Filtreler"},
+    "Hamısı": {"en": "All", "ru": "Все", "tr": "Tümü"},
+    "I Sinif (O)": {"en": "Class I (O)", "ru": "Класс I (O)", "tr": "I. Sınıf (O)"},
+    "II-III Sinif (M/D)": {
+        "en": "Class II-III (M/D)", "ru": "Класс II-III (M/D)", "tr": "II-III. Sınıf (M/D)"},
+    "V Sinif (V)": {"en": "Class V (V)", "ru": "Класс V (V)", "tr": "V. Sınıf (V)"},
+    "Cins:": {"en": "Gender:", "ru": "Пол:", "tr": "Cinsiyet:"},
+    "Sinif:": {"en": "Class:", "ru": "Класс:", "tr": "Sınıf:"},
+    "Tarixdən:": {"en": "From date:", "ru": "С даты:", "tr": "Tarihten:"},
+    "Tarixə:": {"en": "To date:", "ru": "До даты:", "tr": "Tarihe:"},
+    "Yaşdan:": {"en": "From age:", "ru": "С возраста:", "tr": "Yaştan:"},
+    "Yaşa:": {"en": "To age:", "ru": "До возраста:", "tr": "Yaşa:"},
+    "Hesabla": {"en": "Calculate", "ru": "Рассчитать", "tr": "Hesapla"},
+    "Tarix formatı: gg.aa.illll (məs: 01.01.2026)": {
+        "en": "Date format: dd.mm.yyyy (e.g. 01.01.2026)",
+        "ru": "Формат даты: дд.мм.гггг (напр. 01.01.2026)",
+        "tr": "Tarih formatı: gg.aa.yyyy (örn: 01.01.2026)"},
+    "Yaş rəqəm olmalıdır.": {
+        "en": "Age must be a number.", "ru": "Возраст должен быть числом.", "tr": "Yaş bir sayı olmalıdır."},
+    "Hesablamaya Daxil Pasient": {
+        "en": "Patients Included", "ru": "Включено пациентов", "tr": "Hesaba Dahil Hasta"},
+    "Bazada ümumi": {"en": "Total in database:", "ru": "Всего в базе:", "tr": "Veritabanında toplam:"},
+    "pasient qeydiyyatdadır": {
+        "en": "patients registered", "ru": "зарегистрированных пациентов", "tr": "hasta kayıtlı"},
+    "Filtrə uyğun pasient tapılmadı.": {
+        "en": "No patients match this filter.", "ru": "Нет пациентов, соответствующих фильтру.",
+        "tr": "Bu filtreye uyan hasta bulunamadı."},
+    "📈 Zaman Üzrə Dinamika": {
+        "en": "📈 Trend Over Time", "ru": "📈 Динамика по времени", "tr": "📈 Zamana Göre Değişim"},
+    "Bu tarix aralığı üçün məlumat yoxdur.": {
+        "en": "No data for this date range.", "ru": "Нет данных за этот период.",
+        "tr": "Bu tarih aralığı için veri yok."},
 }
 
 # hər dildəki mətndən (az/en/ru/tr — hansı hazırda ekranda olur-olsun) eyni girişə
@@ -866,6 +898,13 @@ _CLOUD_SYNC_LOCK = threading.Lock()  # manuel push/pull ile 20sn'lik otomatik ti
 _BACKUP_DIRTY = False   # yerelde değişiklik oldu, .bxd yedeyi bekliyor
 _BACKUP_LAST_CHANGE = 0.0
 
+# hastalar.json-un faktiki disk yazısı — pasient/foto sayı artdıqca hər kiçik
+# əməliyyatda (məs. hər diş kliki) BÜTÜN bazanı sinxron yenidən yazmaq proqramı
+# get-gedə yavaşladırdığından, bu DentalApp._hastalar_save_tick tərəfindən
+# qısa (≈0.8s) gecikdirilərək arxa plan thread-ində aparılır (bax: veri_kaydet).
+_HASTALAR_DIRTY       = False
+_HASTALAR_LAST_CHANGE = 0.0
+
 _CLOUD_SENT_HASH = {}   # hasta_id -> son uğurla buluda göndərilmiş/buluddan alınmış
                          # məzmunun hash-i — avtomatik sinxron BUNA görə YALNIZ
                          # HƏQİQƏTƏN dəyişmiş hastaları göndərir (hər 23 hastanı
@@ -874,16 +913,26 @@ _CLOUD_SENT_HASH = {}   # hasta_id -> son uğurla buluda göndərilmiş/buluddan
 def _hasta_hash(h):
     return hashlib.sha1(json.dumps(h, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
 
-def veri_kaydet(data):
-    global _CLOUD_DIRTY, _BACKUP_DIRTY, _BACKUP_LAST_CHANGE
+def _hastalar_disk_yaz(data):
+    """hastalar.json-u atomik yazır: əvvəlcə .tmp faylına yaz, sonra os.replace() ilə
+    əsl faylın üzərinə köçür — yazma yarıda kəsilsə (cərəyan, çökmə, sinxron zamanı
+    bağlama) hastalar.json ya tam yeni halı ilə qalır, ya da heç toxunulmamış qalır,
+    YARIMÇIQ/korrupt olmur."""
     os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
-    # atomik yazma: əvvəlcə .tmp faylına yaz, sonra os.replace() ilə əsl faylın üzərinə
-    # köçür — yazma yarıda kəsilsə (cərəyan, çökmə, sinxron zamanı bağlama) hastalar.json
-    # ya tam yeni halı ilə qalır, ya da heç toxunulmamış qalır, YARIMÇIQ/korrupt olmur.
     tmp_yol = DATA_FILE + ".tmp"
-    with open(tmp_yol,"w",encoding="utf-8") as f:
-        json.dump(data,f,ensure_ascii=False,indent=2)
+    with open(tmp_yol, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
     os.replace(tmp_yol, DATA_FILE)
+
+def veri_kaydet(data):
+    """hastalar.json-un dəyişdiyini işarələyir. Faktiki (bahalı) disk yazısı DƏRHAL
+    deyil — DentalApp._hastalar_save_tick tərəfindən qısa müddət sonra arxa plan
+    thread-ində aparılır (bax: yuxarıdakı _HASTALAR_DIRTY şərhi). Proqram bağlananda
+    (_on_close) gözləyən yazı dərhal flush edilir ki, məlumat itməsin."""
+    global _CLOUD_DIRTY, _BACKUP_DIRTY, _BACKUP_LAST_CHANGE
+    global _HASTALAR_DIRTY, _HASTALAR_LAST_CHANGE
+    _HASTALAR_DIRTY = True
+    _HASTALAR_LAST_CHANGE = time.time()
     _CLOUD_DIRTY = True
     _BACKUP_DIRTY = True
     _BACKUP_LAST_CHANGE = time.time()
@@ -1020,6 +1069,12 @@ TEDAVILER = [
 T_COLOR = {t[0]: t[2] for t in TEDAVILER}
 
 CINSIYET_SECENEKLERI = [("", "—"), ("kisi", "Kişi"), ("qadin", "Qadın")]
+
+# Statistika filtrləri — cinsiyət (Hamısı daxil) + Black sinifləşdirməsinə görə boşluq sinfi
+# (checkbox-lar — I/II-III/V eyni anda bir neçəsi seçilə bilər; heç biri seçilməyibsə = Hamısı)
+STAT_CINSIYET_SECENEKLERI = [("hamisi", "Hamısı"), ("kisi", "Kişi"), ("qadin", "Qadın")]
+SINIF_SECENEKLERI = [("I", "I Sinif (O)"), ("II_III", "II-III Sinif (M/D)"), ("V", "V Sinif (V)")]
+SINIF_YUZEYLER = {"I": ["O"], "II_III": ["M", "D"], "V": ["V"]}
 
 # ── SƏSLİ ASİSTENT — mətn təhlili (mikrofon/modeldən asılı olmayan xalis funksiyalar) ──
 # "Plan" tabındakı düymə dəstinin eynisi (bax _tbar: tab="plan" skip şərtləri) — kok/curuk
@@ -2315,6 +2370,78 @@ def _stat_legend_img(items, h=24, gap=22):
         x += w + gap
     return img
 
+STAT_RENG_ARTIR  = (34, 197, 94)    # tendensiya yuxarı — yaşıl
+STAT_RENG_AZALIR = (239, 68, 63)    # tendensiya aşağı — qırmızı
+
+def _stat_trend(vals):
+    """vals: xronoloji ədəd siyahısı. Birinci yarı ortalaması ilə ikinci yarı
+    ortalamasını müqayisə edib (faiz_deyisim, artirmi) qaytarır — artirmi None
+    olarsa tendensiya hesablamaq üçün kifayət qədər nöqtə yoxdur."""
+    n = len(vals)
+    if n < 2 or sum(vals) == 0:
+        return 0.0, None
+    mid = n // 2
+    birinci  = vals[:mid] or vals[:1]
+    ikinci   = vals[mid:] or vals[-1:]
+    ort1 = sum(birinci) / len(birinci)
+    ort2 = sum(ikinci) / len(ikinci)
+    if ort1 == ort2:
+        return 0.0, None
+    pct = 100.0 if ort1 == 0 else (ort2 - ort1) / ort1 * 100
+    return pct, (ort2 > ort1)
+
+def _stat_line_chart(points, color, width=720, height=260,
+                      left_pad=50, right_pad=30, top_pad=40, bottom_pad=44):
+    """points: [(etiket, deger), ...] — xronoloji sırada. Kordinat oxlu xətt
+    qrafiki + nöqtələr + ümumi tendensiyanı göstərən ox (↑/↓) və faiz dəyişim."""
+    if not points:
+        return None
+    vals = [v for _, v in points]
+    max_val = max(vals, default=0) or 1
+    n = len(points)
+    plot_w = max(10, width - left_pad - right_pad)
+    plot_h = max(10, height - top_pad - bottom_pad)
+    img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+
+    # Kordinat oxları
+    d.line((left_pad, top_pad, left_pad, top_pad + plot_h), fill=(70, 84, 112), width=1)
+    d.line((left_pad, top_pad + plot_h, left_pad + plot_w, top_pad + plot_h),
+           fill=(70, 84, 112), width=1)
+    d.text((left_pad - 10, top_pad), str(max_val), font=_SF_VAL,
+           fill=(160, 175, 200), anchor="rm")
+    d.text((left_pad - 10, top_pad + plot_h), "0", font=_SF_VAL,
+           fill=(160, 175, 200), anchor="rm")
+
+    def xy(i, v):
+        x = left_pad + (plot_w * i / (n - 1) if n > 1 else plot_w / 2)
+        y = top_pad + plot_h - (plot_h * v / max_val if max_val else 0)
+        return x, y
+
+    coords = [xy(i, v) for i, (_, v) in enumerate(points)]
+    if len(coords) > 1:
+        d.line(coords, fill=color, width=3, joint="curve")
+    for x, y in coords:
+        d.ellipse((x - 4, y - 4, x + 4, y + 4), fill=color, outline=(14, 18, 28), width=1)
+
+    max_labels = 8
+    step = max(1, round(n / max_labels))
+    for i, (lbl, v) in enumerate(points):
+        if i % step and i != n - 1:
+            continue
+        x, y = coords[i]
+        d.text((x, top_pad + plot_h + 8), str(lbl), font=_SF_LBL,
+               fill=(160, 175, 200), anchor="mt")
+        d.text((x, y - 10), str(v), font=_SF_VAL, fill=(232, 237, 245), anchor="mb")
+
+    pct, artirmi = _stat_trend(vals)
+    if artirmi is not None:
+        trend_color = STAT_RENG_ARTIR if artirmi else STAT_RENG_AZALIR
+        ox = "↑" if artirmi else "↓"
+        d.text((left_pad + plot_w, top_pad - 16), f"{ox} {abs(pct):.0f}%",
+               font=_SF_LBLB, fill=trend_color, anchor="rm")
+    return img
+
 def get_map_photo(tedaviler, dis_tasi=False, secili=None, band_lbl="Diş Daşı Təmizliyi",
                   ilkin=False, secili_cok=None):
     S = _MS
@@ -2719,6 +2846,10 @@ class DentalApp(ctk.CTk):
         self.after(2000, self._check_xray_queue)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
+        # ── hastalar.json-un gecikdirilmiş/arxa plan disk yazısı (performans) ──
+        self._hastalar_save_islemde = False
+        self.after(500, self._hastalar_save_tick)
+
         # ── 5 saniyəlik "dəyişiklikdən sonra yedəklə" dövrəsi (.bxd) ───────────
         self.after(1000, self._bxd_backup_tick)
 
@@ -2736,6 +2867,11 @@ class DentalApp(ctk.CTk):
         self._sesli_thread = None
         if sesli_asistent_aktiv():
             self.after(2000, self._sesli_baslat)
+
+        # ── Təkrarlanan pəncərələrin qarşısını almaq üçün referanslar (yalnız 1 instansı) ──
+        self._randevu_win = None
+        self._statistika_win = None
+        self._foto_win = None
 
         # ── Ümumi AI Söhbəti (push-to-talk, F9) — wake-word sistemindən MÜSTƏQİL ──
         self._chat_win = None
@@ -3452,7 +3588,12 @@ class DentalApp(ctk.CTk):
     def _foto_tam_goster(self, foto):
         from PIL import Image, ImageTk
         from io import BytesIO
+        if self._foto_win is not None and self._foto_win.winfo_exists():
+            try: self._foto_win.destroy()
+            except Exception: pass
+            self._foto_win = None
         pencere = tk.Toplevel(self)
+        self._foto_win = pencere
         pencere.title(foto.get("dosya","Foto"))
         pencere.configure(bg="black")
         sw = pencere.winfo_screenwidth()
@@ -3472,13 +3613,19 @@ class DentalApp(ctk.CTk):
                  font=("Arial",11)).pack(side="left",padx=10,pady=6)
         tk.Label(alt, text=foto.get("tarih",""), fg="#888", bg="#111",
                  font=("Arial",10)).pack(side="left",padx=4)
-        tk.Button(alt, text="Kapat", command=pencere.destroy,
+        def _kapat():
+            if self._foto_win is pencere:
+                self._foto_win = None
+            pencere.destroy()
+        tk.Button(alt, text="Kapat", command=_kapat,
                   bg="#333", fg="white", relief="flat", padx=12).pack(
                   side="right", padx=10, pady=6)
-        pencere.bind("<Escape>",   lambda e: pencere.destroy())
-        pencere.bind("<Button-1>", lambda e: pencere.destroy())
+        pencere.bind("<Escape>",   lambda e: _kapat())
+        pencere.bind("<Button-1>", lambda e: _kapat())
+        pencere.protocol("WM_DELETE_WINDOW", _kapat)
         pencere.update_idletasks()
         pencere.geometry(f"+{(sw-pencere.winfo_width())//2}+{(sh-pencere.winfo_height())//2}")
+        self._pencereni_one_cek(pencere)
 
     def _foto_sil(self, idx, tab):
         if not self.aktif_hid or not self.aktif_vid: return
@@ -3900,6 +4047,40 @@ class DentalApp(ctk.CTk):
             _BACKUP_DIRTY = False
             self._auto_bxd_backup(self.aktif_hid)
         self.after(1000, self._bxd_backup_tick)
+
+    def _hastalar_save_tick(self):
+        """Son dəyişiklikdən ≈0.8 saniyə sonra, hələ arxa planda yazma getmirsə,
+        hastalar.json-u ayrı thread-də diskə yazır. Bir neçə əməliyyat (məs. bir
+        neçə diş kliki) bir-birinin ardınca tez gələndə onları TƏK yazıya birləşdirir
+        və bahalı json.dump+disk yazısını UI thread-indən çıxarır — pasient/foto
+        sayı artdıqca hər kiçik əməliyyatın proqramı get-gedə yavaşlatmasının qarşısı."""
+        global _HASTALAR_DIRTY
+        if (_HASTALAR_DIRTY and not self._hastalar_save_islemde
+                and (time.time() - _HASTALAR_LAST_CHANGE) >= 0.8):
+            _HASTALAR_DIRTY = False
+            self._hastalar_save_islemde = True
+            snap = dict(self.hastalar)   # ana thread'də sığ kopya (bulud-sinxron ilə eyni pattern)
+
+            def _is():
+                try:
+                    _hastalar_disk_yaz(snap)
+                except Exception as e:
+                    print(f"[Save] hastalar.json yazıla bilmədi: {e}")
+                finally:
+                    self._hastalar_save_islemde = False
+            threading.Thread(target=_is, daemon=True).start()
+        self.after(300, self._hastalar_save_tick)
+
+    def _hastalar_save_flush(self):
+        """Gözləyən (dirty) hastalar.json yazısını DƏRHAL (sinxron) icra edir —
+        proqram bağlanarkən (_on_close) məlumat itməsin deyə."""
+        global _HASTALAR_DIRTY
+        if _HASTALAR_DIRTY:
+            _HASTALAR_DIRTY = False
+            try:
+                _hastalar_disk_yaz(dict(self.hastalar))
+            except Exception as e:
+                print(f"[Save] hastalar.json flush edilə bilmədi: {e}")
 
     def _yukle(self, hid=None, vid=None):
         if hid is None: return
@@ -5334,12 +5515,33 @@ class DentalApp(ctk.CTk):
             dlg.after(1000, _geri_sayim)
         _geri_sayim()
 
+    def _pencereni_one_cek(self, win):
+        """Yeni açılan/artıq açıq olan pəncərəni digər proqramların ÜSTÜNƏ çıxarır.
+
+        Sırf lift()/focus_force() bəzən Windows-da pəncərəni digər tətbiqlərin
+        arxasında saxlayır — görünən taskbar fokus dəyişikliyi yalnız qısa
+        topmost yanıb-sönməsi ilə etibarlı işləyir.
+        """
+        try:
+            win.deiconify()
+            win.lift()
+            win.attributes("-topmost", True)
+            win.focus_force()
+            win.after(200, lambda: win.attributes("-topmost", False))
+        except Exception:
+            pass
+
     def _randevu_ac(self):
         import tkinter.messagebox as mb
+        if self._randevu_win is not None and self._randevu_win.winfo_exists():
+            self._pencereni_one_cek(self._randevu_win)
+            return
         win = ctk.CTkToplevel(self, fg_color=TH["bg"])
+        self._randevu_win = win
         win.title(t("Randevu Təqvimi"))
         win.geometry("1380x860")
         win.after(50, lambda: win.state("zoomed"))   # 08-22 tam sığsın deyə böyüdülmüş açılır
+        self._pencereni_one_cek(win)
         # QƏSDƏN topmost/grab_set YOXDUR — bu pəncərə arxa planda açıq qalıb istifadəçi
         # eyni vaxtda əsas planlama pəncərəsində işləyə bilsin (minimize/keçid sərbəst olsun).
         win.grid_columnconfigure(0, weight=1)
@@ -5817,8 +6019,17 @@ class DentalApp(ctk.CTk):
                                     f"'{h.get('ad', '')}' hastası başarıyla yüklendi.")
 
     # ── Statistika ────────────────────────────────────────────────────────────
-    def _statistika_hesabla(self):
-        """Bütün pasientlər üzrə (bütün vakalar daxil) statistik məlumatları toplayır."""
+    def _statistika_hesabla(self, cinsiyet_filtr="hamisi", sinif_filtrler=None,
+                             tarix_bas=None, tarix_son=None, yas_bas=None, yas_son=None):
+        """Filtrlərə uyğun pasient/vaka alt-çoxluğu üzrə statistik məlumatları toplayır.
+
+        cinsiyet_filtr: "hamisi" | "kisi" | "qadin"
+        sinif_filtrler: seçili siniflərin açarlarından ibarət collection — "I"/"II_III"/"V"
+                        bir neçəsi eyni anda seçilə bilər (SINIF_YUZEYLER-ə görə birləşir);
+                        boş/None => bütün boşluq növləri.
+        tarix_bas/tarix_son: date obyekti və ya None (limitsiz) — vaka tarixinə görə.
+        yas_bas/yas_son: int və ya None (limitsiz) — pasient yaşına görə.
+        """
         surf_all    = Counter()
         surf_city   = {}
         surf_gender = {"kisi": Counter(), "qadin": Counter()}
@@ -5826,22 +6037,53 @@ class DentalApp(ctk.CTk):
         cekim_gender = {"kisi": Counter(), "qadin": Counter()}
         patient_gender = Counter()
         patient_city   = Counter()
+        dahil_cins     = Counter()   # hesablamaya daxil olan pasientlərin cins bölgüsü
+        dahil_pasient  = 0
+        zaman_serisi   = Counter()   # {vaka tarixi: seçili sinifə uyğun çürük sayı} — zaman qrafiki üçün
+
+        sinif_yuzeyler = None   # None => bütün boşluq növləri
+        if sinif_filtrler:
+            sinif_yuzeyler = set()
+            for sf in sinif_filtrler:
+                sinif_yuzeyler.update(SINIF_YUZEYLER.get(sf, []))
 
         for h in self.hastalar.values():
             cins = h.get("cinsiyet", "") or ""
+            if cinsiyet_filtr != "hamisi" and cins != cinsiyet_filtr:
+                continue
+            try:
+                yas = int(h.get("yas") or 0) or None
+            except (TypeError, ValueError):
+                yas = None
+            if yas_bas is not None and (yas is None or yas < yas_bas):
+                continue
+            if yas_son is not None and (yas is None or yas > yas_son):
+                continue
             sheher = (h.get("sheher", "") or "").strip()
-            patient_gender[cins or "bilinmir"] += 1
-            if sheher:
-                patient_city[sheher] += 1
+
+            pasient_daxil = False
             for vaka in h.get("vakalar", {}).values():
+                try:
+                    vtarix = datetime.strptime(vaka.get("tarih", ""), "%d.%m.%Y").date()
+                except (ValueError, TypeError):
+                    vtarix = None
+                if tarix_bas is not None and (vtarix is None or vtarix < tarix_bas):
+                    continue
+                if tarix_son is not None and (vtarix is None or vtarix > tarix_son):
+                    continue
+                pasient_daxil = True
                 for n_str, durum in vaka.get("ilkin", {}).items():
                     ns = normalize_state(durum)
                     for y in ns["curuk"]:
+                        if sinif_yuzeyler is not None and y not in sinif_yuzeyler:
+                            continue
                         surf_all[y] += 1
                         if sheher:
                             surf_city.setdefault(sheher, Counter())[y] += 1
                         if cins in surf_gender:
                             surf_gender[cins][y] += 1
+                        if vtarix is not None:
+                            zaman_serisi[vtarix] += 1
                 for n_str, durum in vaka.get("tedavi", {}).items():
                     ns = normalize_state(durum)
                     if ns["tac"] == "cekim":
@@ -5850,23 +6092,90 @@ class DentalApp(ctk.CTk):
                         cekim_tooth[n] += 1
                         if cins in cekim_gender:
                             cekim_gender[cins][n] += 1
+
+            if pasient_daxil:
+                dahil_pasient += 1
+                dahil_cins[cins or "bilinmir"] += 1
+                patient_gender[cins or "bilinmir"] += 1
+                if sheher:
+                    patient_city[sheher] += 1
         return {
             "surf_all": surf_all, "surf_city": surf_city, "surf_gender": surf_gender,
             "cekim_tooth": cekim_tooth, "cekim_gender": cekim_gender,
             "patient_gender": patient_gender, "patient_city": patient_city,
+            "dahil_pasient": dahil_pasient, "dahil_cins": dahil_cins,
+            "zaman_serisi": zaman_serisi,
         }
 
     def _statistika_ac(self):
-        stat = self._statistika_hesabla()
+        import tkinter.messagebox as stat_mb
+        if self._statistika_win is not None and self._statistika_win.winfo_exists():
+            self._pencereni_one_cek(self._statistika_win)
+            return
         win = ctk.CTkToplevel(self, fg_color=TH["bg"])
+        self._statistika_win = win
         win.title(t("Statistika"))
         win.geometry("980x860")
         win.after(50, lambda: win.state("zoomed"))
+        self._pencereni_one_cek(win)
         win.grid_columnconfigure(0, weight=1)
-        win.grid_rowconfigure(0, weight=1)
+        win.grid_rowconfigure(1, weight=1)
+
+        # ── Filtr paneli (sabit, scroll olunmayan) ──
+        filtr_f = ctk.CTkFrame(win, fg_color=TH["panel"], corner_radius=12)
+        filtr_f.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 4))
+
+        def _filtr_etiket(parent, text):
+            ctk.CTkLabel(parent, text=text, font=ctk.CTkFont(size=11, weight="bold"),
+                         text_color=TH["txt_sub"]).pack(side="left", padx=(12, 4), pady=10)
+
+        _filtr_etiket(filtr_f, t("Cins:"))
+        cins_var = tk.StringVar(value=t("Hamısı"))
+        ctk.CTkOptionMenu(filtr_f, variable=cins_var,
+                          values=[t(l) for _, l in STAT_CINSIYET_SECENEKLERI],
+                          height=30, corner_radius=8, width=110,
+                          fg_color=TH["panel_soft"], button_color=TH["accent"],
+                          button_hover_color=TH["accent_hover"]).pack(side="left", pady=10)
+
+        _filtr_etiket(filtr_f, t("Sinif:"))
+        sinif_vars = {}   # key -> BooleanVar; heç biri seçilməyibsə = Hamısı (I/II-III/V eyni anda seçilə bilər)
+        for key, lbl in SINIF_SECENEKLERI:
+            var = tk.BooleanVar(value=False)
+            sinif_vars[key] = var
+            ctk.CTkCheckBox(filtr_f, text=t(lbl), variable=var,
+                             checkbox_width=18, checkbox_height=18,
+                             font=ctk.CTkFont(size=11),
+                             fg_color=TH["accent"], hover_color=TH["accent_hover"],
+                             border_color=TH["accent_soft"],
+                             text_color=TH["txt"]).pack(side="left", padx=(2, 10), pady=10)
+
+        _filtr_etiket(filtr_f, t("Tarixdən:"))
+        tarix_bas_e = ctk.CTkEntry(filtr_f, placeholder_text="gg.aa.illll", height=30,
+                                    width=100, corner_radius=8,
+                                    border_color=TH["accent_soft"], fg_color=TH["panel_soft"])
+        tarix_bas_e.pack(side="left", pady=10)
+        _filtr_etiket(filtr_f, t("Tarixə:"))
+        tarix_son_e = ctk.CTkEntry(filtr_f, placeholder_text="gg.aa.illll", height=30,
+                                    width=100, corner_radius=8,
+                                    border_color=TH["accent_soft"], fg_color=TH["panel_soft"])
+        tarix_son_e.pack(side="left", pady=10)
+
+        _filtr_etiket(filtr_f, t("Yaşdan:"))
+        yas_bas_e = ctk.CTkEntry(filtr_f, height=30, width=60, corner_radius=8,
+                                  border_color=TH["accent_soft"], fg_color=TH["panel_soft"])
+        yas_bas_e.pack(side="left", pady=10)
+        _filtr_etiket(filtr_f, t("Yaşa:"))
+        yas_son_e = ctk.CTkEntry(filtr_f, height=30, width=60, corner_radius=8,
+                                  border_color=TH["accent_soft"], fg_color=TH["panel_soft"])
+        yas_son_e.pack(side="left", pady=10)
+
+        hesabla_btn = ctk.CTkButton(filtr_f, text=t("Hesabla"), height=30, corner_radius=8,
+                                     fg_color=TH["ok"], hover_color=TH["ok_hover"],
+                                     font=ctk.CTkFont(size=12, weight="bold"))
+        hesabla_btn.pack(side="left", padx=12, pady=10)
 
         scroll = ctk.CTkScrollableFrame(win, fg_color=TH["bg"])
-        scroll.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        scroll.grid(row=1, column=0, sticky="nsew", padx=10, pady=(4, 10))
 
         def _basliq(text):
             ctk.CTkLabel(scroll, text=text, font=ctk.CTkFont(size=16, weight="bold"),
@@ -5890,113 +6199,190 @@ class DentalApp(ctk.CTk):
         def _yuz_lbl(y):
             return f"{y} ({YUZEY_AD.get(y, y)})"
 
-        # ── Ümumi məlumat ──
-        _basliq(t("📊 Ümumi Məlumat"))
-        umumi = _kart()
-        toplam = len(self.hastalar)
-        kisi_n = stat["patient_gender"].get("kisi", 0)
-        qadin_n = stat["patient_gender"].get("qadin", 0)
-        bilinmir_n = stat["patient_gender"].get("bilinmir", 0)
-        tiles = ctk.CTkFrame(umumi, fg_color="transparent")
-        tiles.pack(fill="x", padx=12, pady=12)
-        for lbl, val, color in [
-            (t("Toplam Pasient"), toplam, TH["accent"]),
-            (t("Kişi"), kisi_n, "#%02x%02x%02x" % STAT_RENG_KISI),
-            (t("Qadın"), qadin_n, "#%02x%02x%02x" % STAT_RENG_QADIN),
-            (t("Cinsiyəti Qeyd Olunmayan"), bilinmir_n, TH["txt_faint"]),
-        ]:
-            tile = ctk.CTkFrame(tiles, fg_color=TH["panel_soft"], corner_radius=10,
-                                 width=190, height=72)
-            tile.pack(side="left", padx=6)
-            tile.pack_propagate(False)
-            ctk.CTkLabel(tile, text=str(val), font=ctk.CTkFont(size=22, weight="bold"),
-                         text_color=color).pack(pady=(12, 0))
-            ctk.CTkLabel(tile, text=lbl, font=ctk.CTkFont(size=10),
-                         text_color=TH["txt_sub"]).pack()
+        def _oxu_filtrler():
+            cinsiyet_filtr = next((k for k, l in STAT_CINSIYET_SECENEKLERI
+                                    if t(l) == cins_var.get()), "hamisi")
+            sinif_filtrler = [k for k, v in sinif_vars.items() if v.get()]
 
-        # ── Çürük analizi (boşluq yerləşməsi) ──
-        _basliq(t("🦷 Çürük Analizi — Boşluq Yerləşməsi"))
-        curuk_f = _kart()
-        items = sorted(stat["surf_all"].items(), key=lambda x: -x[1])
-        items = [(_yuz_lbl(y), v) for y, v in items]
-        img = _stat_bar_chart(items, STAT_RENG_CURUK, width=720)
-        _img_goster(curuk_f, img, t("Çürük qeydi yoxdur."))
+            def _tarix(entry):
+                s = entry.get().strip()
+                if not s: return None, False
+                try: return datetime.strptime(s, "%d.%m.%Y").date(), False
+                except ValueError: return None, True
 
-        # ── Diş çəkimi statistikası ──
-        _basliq(t("🦴 Diş Çəkimi Statistikası"))
-        cekim_f = _kart()
-        top_cekim = sorted(stat["cekim_tooth"].items(), key=lambda x: -x[1])[:14]
-        items = [(str(n), v) for n, v in top_cekim]
-        img = _stat_bar_chart(items, STAT_RENG_CEKIM, width=720)
-        _img_goster(cekim_f, img, t("Çəkim qeydi yoxdur."))
+            def _yas(entry):
+                s = entry.get().strip()
+                if not s: return None, False
+                try: return int(s), False
+                except ValueError: return None, True
 
-        # ── Şəhərə görə statistika ──
-        _basliq(t("📍 Şəhərə Görə Statistika"))
-        sheher_f = _kart()
-        sheherler = sorted(stat["surf_city"].keys())
-        if not sheherler:
-            ctk.CTkLabel(sheher_f, text=t("Şəhər məlumatı qeyd olunmayıb."),
-                         font=ctk.CTkFont(size=12),
-                         text_color=TH["txt_faint"]).pack(padx=16, pady=16, anchor="w")
-        else:
-            sec_f = ctk.CTkFrame(sheher_f, fg_color="transparent")
-            sec_f.pack(fill="x", padx=12, pady=(12, 0), anchor="w")
-            ctk.CTkLabel(sec_f, text=t("Şəhər:"), font=ctk.CTkFont(size=12, weight="bold"),
-                         text_color=TH["txt_sub"]).pack(side="left", padx=(0, 8))
-            sheher_var = tk.StringVar(value=sheherler[0])
-            chart_holder = ctk.CTkFrame(sheher_f, fg_color="transparent")
-            chart_holder.pack(fill="x", padx=4, pady=8, anchor="w")
+            tarix_bas, err1 = _tarix(tarix_bas_e)
+            tarix_son, err2 = _tarix(tarix_son_e)
+            if err1 or err2:
+                stat_mb.showerror(t("Xəta"), t("Tarix formatı: gg.aa.illll (məs: 01.01.2026)"))
+                return None
+            yas_bas, err3 = _yas(yas_bas_e)
+            yas_son, err4 = _yas(yas_son_e)
+            if err3 or err4:
+                stat_mb.showerror(t("Xəta"), t("Yaş rəqəm olmalıdır."))
+                return None
+            return dict(cinsiyet_filtr=cinsiyet_filtr, sinif_filtrler=sinif_filtrler,
+                        tarix_bas=tarix_bas, tarix_son=tarix_son,
+                        yas_bas=yas_bas, yas_son=yas_son)
 
-            def _sheher_render(*_):
-                for w in chart_holder.winfo_children(): w.destroy()
-                sh = sheher_var.get()
-                cnt = stat["surf_city"].get(sh, Counter())
-                toplam_sh = sum(cnt.values()) or 1
-                n_pasient = stat["patient_city"].get(sh, 0)
-                ctk.CTkLabel(chart_holder, text=f"{sh} — {n_pasient} {t('pasient')}",
+        def _render():
+            filt = _oxu_filtrler()
+            if filt is None:
+                return
+            for w in scroll.winfo_children():
+                w.destroy()
+            stat = self._statistika_hesabla(**filt)
+
+            # ── Ümumi məlumat ──
+            _basliq(t("📊 Ümumi Məlumat"))
+            umumi = _kart()
+            dahil_n  = stat["dahil_pasient"]
+            kisi_n   = stat["dahil_cins"].get("kisi", 0)
+            qadin_n  = stat["dahil_cins"].get("qadin", 0)
+            bilinmir_n = stat["dahil_cins"].get("bilinmir", 0)
+            tiles = ctk.CTkFrame(umumi, fg_color="transparent")
+            tiles.pack(fill="x", padx=12, pady=(12, 4))
+            for lbl, val, color in [
+                (t("Hesablamaya Daxil Pasient"), dahil_n, TH["accent"]),
+                (t("Kişi"), kisi_n, "#%02x%02x%02x" % STAT_RENG_KISI),
+                (t("Qadın"), qadin_n, "#%02x%02x%02x" % STAT_RENG_QADIN),
+                (t("Cinsiyəti Qeyd Olunmayan"), bilinmir_n, TH["txt_faint"]),
+            ]:
+                tile = ctk.CTkFrame(tiles, fg_color=TH["panel_soft"], corner_radius=10,
+                                     width=190, height=72)
+                tile.pack(side="left", padx=6)
+                tile.pack_propagate(False)
+                ctk.CTkLabel(tile, text=str(val), font=ctk.CTkFont(size=22, weight="bold"),
+                             text_color=color).pack(pady=(12, 0))
+                ctk.CTkLabel(tile, text=lbl, font=ctk.CTkFont(size=10),
+                             text_color=TH["txt_sub"]).pack()
+            ctk.CTkLabel(umumi, text=f"({t('Bazada ümumi')} {len(self.hastalar)} {t('pasient qeydiyyatdadır')})",
+                         font=ctk.CTkFont(size=11), text_color=TH["txt_faint"]).pack(
+                         anchor="w", padx=16, pady=(0, 12))
+            if dahil_n == 0:
+                ctk.CTkLabel(umumi, text=t("Filtrə uyğun pasient tapılmadı."),
                              font=ctk.CTkFont(size=12, weight="bold"),
-                             text_color=TH["txt"]).pack(anchor="w", pady=(0, 6))
-                sh_items = sorted(cnt.items(), key=lambda x: -x[1])
-                sh_items = [(f"{_yuz_lbl(y)} — {round(100*v/toplam_sh)}%", v) for y, v in sh_items]
-                img2 = _stat_bar_chart(sh_items, STAT_RENG_CURUK, width=680, left_pad=210)
-                _img_goster(chart_holder, img2, t("Bu şəhər üçün çürük qeydi yoxdur."), pad=(0, 0))
+                             text_color=TH["txt_faint"]).pack(anchor="w", padx=16, pady=(0, 12))
 
-            ctk.CTkOptionMenu(sec_f, values=sheherler, variable=sheher_var,
-                              command=lambda _v: _sheher_render(),
-                              height=30, corner_radius=8,
-                              fg_color=TH["panel_soft"], button_color=TH["accent"],
-                              button_hover_color=TH["accent_hover"]).pack(side="left")
-            _sheher_render()
+            # ── Çürük analizi (boşluq yerləşməsi, seçili sinifə görə) ──
+            _basliq(t("🦷 Çürük Analizi — Boşluq Yerləşməsi"))
+            curuk_f = _kart()
+            toplam_curuk = sum(stat["surf_all"].values())
+            items = sorted(stat["surf_all"].items(), key=lambda x: -x[1])
+            items = [(f"{_yuz_lbl(y)} — {round(100*v/toplam_curuk) if toplam_curuk else 0}%", v)
+                     for y, v in items]
+            img = _stat_bar_chart(items, STAT_RENG_CURUK, width=720)
+            _img_goster(curuk_f, img, t("Çürük qeydi yoxdur."))
 
-        # ── Cinsiyətə görə statistika ──
-        _basliq(t("⚥ Cinsiyətə Görə Statistika"))
-        cins_f = _kart()
-        legend = _stat_legend_img([(t("Kişi"), STAT_RENG_KISI), (t("Qadın"), STAT_RENG_QADIN)])
-        legend_photo = ImageTk.PhotoImage(legend)
-        legend_lbl = tk.Label(cins_f, image=legend_photo, bg=TH["panel"], borderwidth=0)
-        legend_lbl.image = legend_photo
-        legend_lbl.pack(padx=16, pady=(14, 4), anchor="w")
+            # ── Zaman üzrə dinamika (yalnız tarix aralığı seçilibsə) ──
+            if filt["tarix_bas"] is not None or filt["tarix_son"] is not None:
+                _basliq(t("📈 Zaman Üzrə Dinamika"))
+                zaman_f = _kart()
+                zaman = stat["zaman_serisi"]
+                if not zaman:
+                    _img_goster(zaman_f, None, t("Bu tarix aralığı üçün məlumat yoxdur."))
+                else:
+                    tarixler = sorted(zaman.keys())
+                    span = (tarixler[-1] - tarixler[0]).days
+                    if span <= 31:
+                        bucket_key = lambda dt: dt
+                        bucket_lbl = lambda k: k.strftime("%d.%m")
+                    elif span <= 180:
+                        bucket_key = lambda dt: dt - timedelta(days=dt.weekday())
+                        bucket_lbl = lambda k: k.strftime("%d.%m")
+                    else:
+                        bucket_key = lambda dt: date(dt.year, dt.month, 1)
+                        bucket_lbl = lambda k: k.strftime("%m.%Y")
+                    bucketed = Counter()
+                    for dt, cnt in zaman.items():
+                        bucketed[bucket_key(dt)] += cnt
+                    points = [(bucket_lbl(k), bucketed[k]) for k in sorted(bucketed.keys())]
+                    imgz = _stat_line_chart(points, STAT_RENG_CURUK, width=720)
+                    _img_goster(zaman_f, imgz, t("Bu tarix aralığı üçün məlumat yoxdur."))
 
-        all_surf = sorted(set(stat["surf_gender"]["kisi"]) | set(stat["surf_gender"]["qadin"]),
-                           key=lambda y: -(stat["surf_gender"]["kisi"].get(y, 0)
-                                           + stat["surf_gender"]["qadin"].get(y, 0)))
-        if all_surf:
-            cats = [_yuz_lbl(y) for y in all_surf]
-            series = [(t("Kişi"), STAT_RENG_KISI,
-                       {_yuz_lbl(y): stat["surf_gender"]["kisi"].get(y, 0) for y in all_surf}),
-                      (t("Qadın"), STAT_RENG_QADIN,
-                       {_yuz_lbl(y): stat["surf_gender"]["qadin"].get(y, 0) for y in all_surf})]
-            img3 = _stat_grouped_chart(cats, series, width=720)
-            _img_goster(cins_f, img3, t("Çürük qeydi yoxdur."))
-        else:
-            _img_goster(cins_f, None, t("Çürük qeydi yoxdur."))
+            # ── Diş çəkimi statistikası ──
+            _basliq(t("🦴 Diş Çəkimi Statistikası"))
+            cekim_f = _kart()
+            top_cekim = sorted(stat["cekim_tooth"].items(), key=lambda x: -x[1])[:14]
+            items = [(str(n), v) for n, v in top_cekim]
+            img = _stat_bar_chart(items, STAT_RENG_CEKIM, width=720)
+            _img_goster(cekim_f, img, t("Çəkim qeydi yoxdur."))
 
-        ctk.CTkLabel(cins_f, text=t("Çəkim sayı"), font=ctk.CTkFont(size=12, weight="bold"),
-                     text_color=TH["txt_sub"]).pack(anchor="w", padx=16, pady=(4, 0))
-        cekim_items = [(t("Kişi"), sum(stat["cekim_gender"]["kisi"].values())),
-                       (t("Qadın"), sum(stat["cekim_gender"]["qadin"].values()))]
-        img4 = _stat_bar_chart(cekim_items, STAT_RENG_CEKIM, width=720, bar_h=28)
-        _img_goster(cins_f, img4, t("Çəkim qeydi yoxdur."))
+            # ── Şəhərə görə statistika ──
+            _basliq(t("📍 Şəhərə Görə Statistika"))
+            sheher_f = _kart()
+            sheherler = sorted(stat["surf_city"].keys())
+            if not sheherler:
+                ctk.CTkLabel(sheher_f, text=t("Şəhər məlumatı qeyd olunmayıb."),
+                             font=ctk.CTkFont(size=12),
+                             text_color=TH["txt_faint"]).pack(padx=16, pady=16, anchor="w")
+            else:
+                sec_f = ctk.CTkFrame(sheher_f, fg_color="transparent")
+                sec_f.pack(fill="x", padx=12, pady=(12, 0), anchor="w")
+                ctk.CTkLabel(sec_f, text=t("Şəhər:"), font=ctk.CTkFont(size=12, weight="bold"),
+                             text_color=TH["txt_sub"]).pack(side="left", padx=(0, 8))
+                sheher_var = tk.StringVar(value=sheherler[0])
+                chart_holder = ctk.CTkFrame(sheher_f, fg_color="transparent")
+                chart_holder.pack(fill="x", padx=4, pady=8, anchor="w")
+
+                def _sheher_render(*_):
+                    for w in chart_holder.winfo_children(): w.destroy()
+                    sh = sheher_var.get()
+                    cnt = stat["surf_city"].get(sh, Counter())
+                    toplam_sh = sum(cnt.values()) or 1
+                    n_pasient = stat["patient_city"].get(sh, 0)
+                    ctk.CTkLabel(chart_holder, text=f"{sh} — {n_pasient} {t('pasient')}",
+                                 font=ctk.CTkFont(size=12, weight="bold"),
+                                 text_color=TH["txt"]).pack(anchor="w", pady=(0, 6))
+                    sh_items = sorted(cnt.items(), key=lambda x: -x[1])
+                    sh_items = [(f"{_yuz_lbl(y)} — {round(100*v/toplam_sh)}%", v) for y, v in sh_items]
+                    img2 = _stat_bar_chart(sh_items, STAT_RENG_CURUK, width=680, left_pad=210)
+                    _img_goster(chart_holder, img2, t("Bu şəhər üçün çürük qeydi yoxdur."), pad=(0, 0))
+
+                ctk.CTkOptionMenu(sec_f, values=sheherler, variable=sheher_var,
+                                  command=lambda _v: _sheher_render(),
+                                  height=30, corner_radius=8,
+                                  fg_color=TH["panel_soft"], button_color=TH["accent"],
+                                  button_hover_color=TH["accent_hover"]).pack(side="left")
+                _sheher_render()
+
+            # ── Cinsiyətə görə statistika ──
+            _basliq(t("⚥ Cinsiyətə Görə Statistika"))
+            cins_f = _kart()
+            legend = _stat_legend_img([(t("Kişi"), STAT_RENG_KISI), (t("Qadın"), STAT_RENG_QADIN)])
+            legend_photo = ImageTk.PhotoImage(legend)
+            legend_lbl = tk.Label(cins_f, image=legend_photo, bg=TH["panel"], borderwidth=0)
+            legend_lbl.image = legend_photo
+            legend_lbl.pack(padx=16, pady=(14, 4), anchor="w")
+
+            all_surf = sorted(set(stat["surf_gender"]["kisi"]) | set(stat["surf_gender"]["qadin"]),
+                               key=lambda y: -(stat["surf_gender"]["kisi"].get(y, 0)
+                                               + stat["surf_gender"]["qadin"].get(y, 0)))
+            if all_surf:
+                cats = [_yuz_lbl(y) for y in all_surf]
+                series = [(t("Kişi"), STAT_RENG_KISI,
+                           {_yuz_lbl(y): stat["surf_gender"]["kisi"].get(y, 0) for y in all_surf}),
+                          (t("Qadın"), STAT_RENG_QADIN,
+                           {_yuz_lbl(y): stat["surf_gender"]["qadin"].get(y, 0) for y in all_surf})]
+                img3 = _stat_grouped_chart(cats, series, width=720)
+                _img_goster(cins_f, img3, t("Çürük qeydi yoxdur."))
+            else:
+                _img_goster(cins_f, None, t("Çürük qeydi yoxdur."))
+
+            ctk.CTkLabel(cins_f, text=t("Çəkim sayı"), font=ctk.CTkFont(size=12, weight="bold"),
+                         text_color=TH["txt_sub"]).pack(anchor="w", padx=16, pady=(4, 0))
+            cekim_items = [(t("Kişi"), sum(stat["cekim_gender"]["kisi"].values())),
+                           (t("Qadın"), sum(stat["cekim_gender"]["qadin"].values()))]
+            img4 = _stat_bar_chart(cekim_items, STAT_RENG_CEKIM, width=720, bar_h=28)
+            _img_goster(cins_f, img4, t("Çəkim qeydi yoxdur."))
+
+        hesabla_btn.configure(command=_render)
+        _render()
 
     # ── X-ray folder watcher methods ─────────────────────────────────────────
 
@@ -7247,6 +7633,12 @@ class DentalApp(ctk.CTk):
             self._xray_observer.join(timeout=2)
         self._sesli_dayandir()
         self._chat_hotkey_sil()
+        # hastalar.json yazısı gecikdirilib (performans, bax: _hastalar_save_tick) —
+        # bağlanmadan əvvəl hələ diskə yazılmamış son dəyişikliklər itməsin deyə gözlə.
+        t0 = time.time()
+        while self._hastalar_save_islemde and (time.time() - t0) < 3.0:
+            time.sleep(0.05)
+        self._hastalar_save_flush()
         self.destroy()
 
 
