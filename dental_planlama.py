@@ -509,6 +509,12 @@ TRANSLATIONS = {
     "Bu tarix aralığı üçün məlumat yoxdur.": {
         "en": "No data for this date range.", "ru": "Нет данных за этот период.",
         "tr": "Bu tarih aralığı için veri yok."},
+    "Saxla": {"en": "Save", "ru": "Сохранить", "tr": "Kaydet"},
+    "Foto Adlandır": {"en": "Name Photo", "ru": "Назвать фото", "tr": "Fotoğrafı Adlandır"},
+    "Foto adı (diş nömrəsi ilə, məs: #36 #35)": {
+        "en": "Photo name (with tooth number, e.g. #36 #35)",
+        "ru": "Название фото (с номером зуба, напр. #36 #35)",
+        "tr": "Foto adı (diş numarasıyla, örn: #36 #35)"},
 }
 
 # hər dildəki mətndən (az/en/ru/tr — hansı hazırda ekranda olur-olsun) eyni girişə
@@ -1081,7 +1087,8 @@ SINIF_YUZEYLER = {"I": ["O"], "II_III": ["M", "D"], "V": ["V"]}
 # yalnız İlkin Vəziyyət sekmesinə aiddir, Plan/Müalicə-yə səslə yazılmır (diaqnostik
 # vəziyyətlərdir, "ediləcək/edilmiş iş" deyil).
 _SESLI_TEDAVI_TIDLER_PLAN = {"saglikli", "cekim", "kanal", "dolgu", "kron", "implant", "eksik", "gozlem"}
-_SESLI_TEDAVI_TIDLER_ILKIN = _SESLI_TEDAVI_TIDLER_PLAN | {"curuk", "kok"}
+# çəkim bir müalicə əməliyyatıdır, ilkin (diaqnostik) vəziyyətə aid deyil (bax _tbar) — səsli də eyni qaydaya tabedir
+_SESLI_TEDAVI_TIDLER_ILKIN = (_SESLI_TEDAVI_TIDLER_PLAN - {"cekim"}) | {"curuk", "kok"}
 _SESLI_TEDAVI_TIDLER_TEDAVI = _SESLI_TEDAVI_TIDLER_PLAN
 _SESLI_TAB_TIDLER = {"plan": _SESLI_TEDAVI_TIDLER_PLAN, "ilkin": _SESLI_TEDAVI_TIDLER_ILKIN,
                       "tedavi": _SESLI_TEDAVI_TIDLER_TEDAVI}
@@ -1100,6 +1107,46 @@ def _netice_qisa_metn(netice):
     return f"Diş {dis} → {lbl} [{tab_lbl}] — təsdiq lazımdır"
 
 _DIS_GECERLI = set(UST + ALT)
+
+# "#36 ..." kimi başlayan not/foto adlarından diş nömrəsini çıxarmaq üçün (bax: _not_dis_no)
+_NOT_DIS_RE = re.compile(r'^\s*#\s*(\d{2})\b')
+
+def _not_dis_no(metin):
+    """'#36 kanal planı' kimi başlayan mətndən (etibarlı dişdirsə) diş nömrəsini qaytarır."""
+    m = _NOT_DIS_RE.match(metin or "")
+    if not m:
+        return None
+    n = int(m.group(1))
+    return n if n in _DIS_GECERLI else None
+
+def _not_edilmis_disler(h):
+    """Pasientin qeyd dəftərindəki (notlar_liste) '#NN' ilə başlayan qeydlərdən
+    istinad olunan diş nömrələrini set olaraq qaytarır (Plan/Müalicə tablarında
+    nida nişanı üçün — bax ArchCanvas.not_disler)."""
+    disler = set()
+    for not_ in h.get("notlar_liste", []) or []:
+        if isinstance(not_, str):
+            continue
+        n = _not_dis_no(not_.get("baslik", "")) or _not_dis_no(not_.get("metin", ""))
+        if n:
+            disler.add(n)
+    return disler
+
+def _foto_dis_nomreleri(dosya_adi):
+    """Foto/rentgen adındakı BÜTÜN '#NN' (və ya '#NN.M') tokenlərini (etibarlı
+    diş nömrələri) sıra ilə qaytarır — çox-dişli adlar üçün (məs. '#36 #35 #34')."""
+    out = []
+    for tok in (dosya_adi or "").split():
+        n = _not_dis_no(tok)
+        if n:
+            out.append(n)
+    return out
+
+def _foto_ilk_dis(dosya_adi):
+    """Foto adındakı İLK (əsas) diş nömrəsini qaytarır — adlandırmada ardıcıl
+    nömrələmə (#36 -> #36.1 -> #36.2) bu əsas nömrəyə görə aparılır."""
+    nos = _foto_dis_nomreleri(dosya_adi)
+    return nos[0] if nos else None
 
 AZ_BIRLIK = {"bir": 1, "iki": 2, "üç": 3, "uc": 3, "dörd": 4, "dord": 4,
              "beş": 5, "bes": 5, "altı": 6, "alti": 6, "yeddi": 7,
@@ -1957,6 +2004,7 @@ def _mfont(sz, bold=False):
 F_MNUM = _mfont(int(12 * M_SCALE * _MS))
 F_MLEG = _mfont(int(10 * M_SCALE * _MS))
 F_MSML = _mfont(int(9 * M_SCALE * _MS))
+F_MBADGE = _mfont(int(10 * M_SCALE * _MS), bold=True)
 
 def _m_kind(n):
     u = n % 10
@@ -2443,7 +2491,7 @@ def _stat_line_chart(points, color, width=720, height=260,
     return img
 
 def get_map_photo(tedaviler, dis_tasi=False, secili=None, band_lbl="Diş Daşı Təmizliyi",
-                  ilkin=False, secili_cok=None):
+                  ilkin=False, secili_cok=None, not_disler=None):
     S = _MS
     states = {}
     for k, v in tedaviler.items():
@@ -2452,10 +2500,11 @@ def get_map_photo(tedaviler, dis_tasi=False, secili=None, band_lbl="Diş Daşı 
         except (TypeError, ValueError):
             continue
         states[n] = normalize_state(v)
+    not_set = set(not_disler) if not_disler else set()
     key_items = tuple(sorted((n, s["tac"], s["kanal"], s["kron"], tuple(s["curuk"]), tuple(s["dolgu"]))
                              for n, s in states.items()))
     cok_key = tuple(secili_cok) if secili_cok else None
-    key = ("bluexmap", key_items, dis_tasi, secili, band_lbl, ilkin, cok_key)
+    key = ("bluexmap", key_items, dis_tasi, secili, band_lbl, ilkin, cok_key, tuple(sorted(not_set)))
     if key in _img_cache: return _img_cache[key]
     if len(_img_cache) > 48: _img_cache.clear()
 
@@ -2494,6 +2543,12 @@ def get_map_photo(tedaviler, dis_tasi=False, secili=None, band_lbl="Diş Daşı 
             else:
                 col = M_NUM
             d.text((x * S, ny * S), str(n), font=F_MNUM, fill=col, anchor="mm")
+            if n in not_set:   # qeyd dəftərində "#NN" ilə bu dişə istinad olunub — nida nişanı
+                bx, by = x + 9 * M_SCALE, ny - 10 * M_SCALE
+                r = 6.5 * M_SCALE
+                d.ellipse((bx * S - r * S, by * S - r * S, bx * S + r * S, by * S + r * S),
+                          fill=(226, 58, 58), outline=(18, 22, 32), width=1 * S)
+                d.text((bx * S, by * S), "!", font=F_MBADGE, fill="white", anchor="mm")
             if n == secili:
                 sel = (x, upper)
             if n in cok_set:
@@ -2560,11 +2615,12 @@ def get_map_photo(tedaviler, dis_tasi=False, secili=None, band_lbl="Diş Daşı 
         if ns["dolgu"]: cnt["dolgu"] = cnt.get("dolgu", 0) + 1
         if not ns["tac"] and not ns["kanal"] and not ns["kron"] and not ns["curuk"] and not ns["dolgu"]:
             healthy += 1
-    row1 = [(t("Sağlam"), M_IVORY, healthy),
-            (t("Çəkim"), M_COLORS["cekim"], cnt.get("cekim", 0)),
-            (t("Kanal"), M_COLORS["kanal"], cnt.get("kanal", 0)),
-            (t("Kompozit Dolğu"), M_COLORS["dolgu"], cnt.get("dolgu", 0)),
-            (t("Qapaq"), M_COLORS["kron"], cnt.get("kron", 0))]
+    row1 = [(t("Sağlam"), M_IVORY, healthy)]
+    if not ilkin:   # çəkim bir müalicə əməliyyatıdır, ilkin (diaqnostik) vəziyyətə aid deyil
+        row1.append((t("Çəkim"), M_COLORS["cekim"], cnt.get("cekim", 0)))
+    row1 += [(t("Kanal"), M_COLORS["kanal"], cnt.get("kanal", 0)),
+             (t("Kompozit Dolğu"), M_COLORS["dolgu"], cnt.get("dolgu", 0)),
+             (t("Qapaq"), M_COLORS["kron"], cnt.get("kron", 0))]
     row2 = [(t("İmplant"), M_COLORS["implant"], cnt.get("implant", 0)),
             (t("Əksik"), (90, 98, 112), cnt.get("eksik", 0))]
     if ilkin:
@@ -2700,21 +2756,26 @@ class ArchCanvas(tk.Canvas):
     DW = MAP_W
     DH = MAP_H
 
-    def __init__(self, parent, on_click, on_range=None, **kw):
+    def __init__(self, parent, on_click, on_range=None, on_long_press=None, **kw):
         super().__init__(parent, width=self.DW, height=self.DH,
                          bg=TH["bg"], highlightthickness=0, cursor="hand2", **kw)
         self.on_click = on_click
         self.on_range = on_range
+        self.on_long_press = on_long_press   # (n) -> None — diş üzərində 0.5s basılı saxlananda
         self.tedaviler = {}
         self.dis_tasi = False
         self.secili = None
         self.band_label = t("Diş Daşı Təmizliyi")
         self.ilkin = False
+        self.not_disler = set()   # qeyd dəftərində "#NN" ilə istinad olunan diş nömrələri (nida nişanı üçün)
         self._ref = None
         self._surukle_sira = None   # sürükleme başladığı diş sırası (UST/ALT)
         self._surukle_disler = []   # sürükleme ile o an kapsanan dişler
         self._surukle_zone = None   # basılan noktadaki yüzey (M/D/O/B/L/V) — dolgu/çürük için
         self._hover_key = None      # (dis_no, yuzey) — üzerinde durulan bölge, hover vurgusu için
+        self._lp_timer = None       # uzun-basma (0.5s) üçün planlanmış `after` id-si
+        self._lp_dis = None         # uzun-basma gözlənilən diş nömrəsi
+        self._lp_fired = False      # bu basışda uzun-basma artıq tətikləndimi (buraxılanda klik tətbiq olunmasın)
         self.bind("<Button-1>", self._bas)
         self.bind("<B1-Motion>", self._surukle)
         self.bind("<ButtonRelease-1>", self._birak)
@@ -2727,7 +2788,8 @@ class ArchCanvas(tk.Canvas):
         self._hover_key = None
         cok = self._surukle_disler if len(self._surukle_disler) > 1 else None
         photo = get_map_photo(self.tedaviler, dis_tasi=self.dis_tasi, secili=self.secili,
-                              band_lbl=self.band_label, ilkin=self.ilkin, secili_cok=cok)
+                              band_lbl=self.band_label, ilkin=self.ilkin, secili_cok=cok,
+                              not_disler=self.not_disler)
         self._ref = photo
         self.create_image(0, 0, anchor="nw", image=photo)
 
@@ -2766,14 +2828,33 @@ class ArchCanvas(tk.Canvas):
         self._surukle_zone = zone
         self.secili = n
         self.ciz()
+        self._lp_fired = False
+        if self.on_long_press:
+            self._lp_dis = n
+            self._lp_timer = self.after(500, self._lp_tetikle)
+
+    def _lp_tetikle(self):
+        self._lp_timer = None
+        if self._lp_dis is not None and self.on_long_press:
+            self._lp_fired = True
+            self.on_long_press(self._lp_dis)
+
+    def _lp_iptal(self):
+        if self._lp_timer is not None:
+            self.after_cancel(self._lp_timer)
+            self._lp_timer = None
+        self._lp_dis = None
 
     def _surukle(self, e):
         if self._surukle_sira is None:
             return
         hit = map_hit(e.x, e.y)
         if hit is None or hit[0] not in self._surukle_sira:
+            self._lp_iptal()
             return
         n = hit[0]
+        if n != self._lp_dis:
+            self._lp_iptal()
         i0 = self._surukle_sira.index(self._surukle_disler[0])
         i1 = self._surukle_sira.index(n)
         lo, hi = (i0, i1) if i0 <= i1 else (i1, i0)
@@ -2784,12 +2865,20 @@ class ArchCanvas(tk.Canvas):
             self.ciz()
 
     def _birak(self, e):
+        self._lp_iptal()
+        lp_fired = self._lp_fired
+        self._lp_fired = False
         disler = self._surukle_disler
         zone = self._surukle_zone
         self._surukle_sira = None
         self._surukle_disler = []
         self._surukle_zone = None
         if not disler:
+            return
+        if lp_fired:
+            # uzun-basma artıq öz əməliyyatını etdi (məs. foto açdı) — buraxılanda
+            # əlavə olaraq müalicə tətbiq olunmasın
+            self.ciz()
             return
         if len(disler) > 1 and self.on_range:
             self.on_range(disler, zone)
@@ -3017,18 +3106,19 @@ class DentalApp(ctk.CTk):
         self._tbar(content, 0, tab="ilkin")
         arch_f=ctk.CTkFrame(content,fg_color="transparent")
         arch_f.grid(row=1,column=0,sticky="nsew")
-        self.arch2=ArchCanvas(arch_f,self._tikla2,on_range=self._tikla2_range)
+        self.arch2=ArchCanvas(arch_f,self._tikla2,on_range=self._tikla2_range,
+                               on_long_press=self._dis_uzun_bas1)
         self.arch2.band_label = t("Diş Daşı")
         self.arch2.ilkin = True
         self.arch2.pack(side="left",anchor="n",padx=10,pady=8)
 
-        infoI_f=ctk.CTkFrame(arch_f,fg_color=TH["panel"],width=220,corner_radius=12)
+        infoI_f=ctk.CTkFrame(arch_f,fg_color=TH["panel"],width=270,corner_radius=12)
         infoI_f.pack(side="left",fill="y",padx=(0,8),pady=8)
         infoI_f.pack_propagate(False)
         ctk.CTkLabel(infoI_f,text=t("SEÇİLİ DİŞ"),
                      font=ctk.CTkFont(size=11,weight="bold"),text_color=TH["accent"]).pack(pady=(16,4))
         self.dis_info2=ctk.CTkLabel(infoI_f,text="—",font=ctk.CTkFont(size=14,weight="bold"),
-                                     text_color=TH["txt"],wraplength=200)
+                                     text_color=TH["txt"],wraplength=250,justify="left")
         self.dis_info2.pack(pady=4)
         ctk.CTkLabel(infoI_f,text=t("İLKİN VƏZİYYƏT"),
                      font=ctk.CTkFont(size=11,weight="bold"),text_color=TH["accent"]).pack(pady=(16,4))
@@ -3091,28 +3181,16 @@ class DentalApp(ctk.CTk):
         self.arch0.pack(side="left",anchor="n",padx=10,pady=8)
 
         info_f=ctk.CTkFrame(arch_f,fg_color=TH["panel"],width=220,corner_radius=12)
-        info_f.pack(side="left",fill="y",padx=(0,8),pady=8)
-        info_f.pack_propagate(False)
+        info_f.pack(side="left",fill="both",expand=True,padx=(0,8),pady=8)
         ctk.CTkLabel(info_f,text=t("SEÇİLİ DİŞ"),
                      font=ctk.CTkFont(size=11,weight="bold"),text_color=TH["accent"]).pack(pady=(16,4))
         self.dis_info=ctk.CTkLabel(info_f,text="—",font=ctk.CTkFont(size=14,weight="bold"),
-                                    text_color=TH["txt"],wraplength=200)
+                                    text_color=TH["txt"],wraplength=320,justify="left")
         self.dis_info.pack(pady=4)
         ctk.CTkLabel(info_f,text=t("PLANLANMIŞ"),
                      font=ctk.CTkFont(size=11,weight="bold"),text_color=TH["accent"]).pack(pady=(16,4))
         self.plan_liste=ctk.CTkScrollableFrame(info_f,fg_color="transparent")
         self.plan_liste.pack(fill="both",expand=True,padx=6,pady=4)
-
-        foto_f=ctk.CTkFrame(arch_f,fg_color=TH["panel"],corner_radius=12)
-        foto_f.pack(side="left",fill="both",expand=True,padx=(0,8),pady=8)
-        ctk.CTkLabel(foto_f,text=t("İNTRAORAL VƏ ÜZ FOTOLARI"),
-                     font=ctk.CTkFont(size=11,weight="bold"),
-                     text_color=TH["accent"]).pack(pady=(12,2),padx=10,anchor="w")
-        ctk.CTkButton(foto_f,text=t("+ Foto Əlavə Et"),height=28,corner_radius=8,
-                       fg_color=TH["accent"],hover_color=TH["accent_hover"],
-                       command=lambda: self._foto_ekle("plan")).pack(padx=10,pady=(2,4),anchor="w")
-        self.foto_scroll_p0=ctk.CTkScrollableFrame(foto_f,fg_color="transparent")
-        self.foto_scroll_p0.pack(fill="both",expand=True,padx=4,pady=(0,4))
 
     def _build_p1(self):
         self.p1.grid_columnconfigure(0,weight=1); self.p1.grid_rowconfigure(0,weight=1)
@@ -3132,17 +3210,18 @@ class DentalApp(ctk.CTk):
                      text_color=TH["accent"]).grid(row=0,column=0,sticky="w",padx=14,pady=(6,0))
         self.muayine_xetti=ctk.CTkFrame(timeline_f,fg_color="transparent")
         self.muayine_xetti.grid(row=1,column=0,sticky="nsew",padx=6,pady=(0,4))
-        self.arch1=ArchCanvas(arch_f,self._tikla1,on_range=self._tikla1_range)
+        self.arch1=ArchCanvas(arch_f,self._tikla1,on_range=self._tikla1_range,
+                               on_long_press=self._dis_uzun_bas1)
         self.arch1.pack(side="left",anchor="n",padx=10,pady=8)
 
-        info1_f=ctk.CTkFrame(arch_f,fg_color=TH["panel"],width=220,corner_radius=12)
+        info1_f=ctk.CTkFrame(arch_f,fg_color=TH["panel"],width=270,corner_radius=12)
         info1_f.pack(side="left",fill="y",padx=(0,8),pady=8)
         info1_f.pack_propagate(False)
         ctk.CTkLabel(info1_f,text=t("SEÇİLİ DİŞ"),
                      font=ctk.CTkFont(size=11,weight="bold"),text_color=TH["accent"]).pack(pady=(16,4))
-        self.dis_info1=ctk.CTkLabel(info1_f,text="—",font=ctk.CTkFont(size=14,weight="bold"),
-                                     text_color=TH["txt"],wraplength=200)
-        self.dis_info1.pack(pady=4)
+        self.dis_info1_f=ctk.CTkFrame(info1_f,fg_color="transparent")
+        self.dis_info1_f.pack(fill="x",padx=4,pady=4)
+        self._dis_info1_render(None, None)
         ctk.CTkLabel(info1_f,text=t("MÜALİCƏ OLUNMUŞ"),
                      font=ctk.CTkFont(size=11,weight="bold"),text_color=TH["accent"]).pack(pady=(16,4))
         self.plan_liste1=ctk.CTkScrollableFrame(info1_f,fg_color="transparent")
@@ -3214,6 +3293,7 @@ class DentalApp(ctk.CTk):
             self.not_baslik.delete(0, "end")
             self.not_metin.delete("1.0", "end")
             self._notlar_guncelle()
+            self._not_disler_yenile()
             self.not_ekle_btn.configure(text="Əlavə edildi ✓", fg_color=TH["ok"])
             self.after(2000, lambda: self.not_ekle_btn.configure(
                 text="+ Qeyd Əlavə Et", fg_color=TH["accent"]))
@@ -3266,6 +3346,17 @@ class DentalApp(ctk.CTk):
             notlar.pop(idx)
             veri_kaydet(self.hastalar)
             self._notlar_guncelle()
+            self._not_disler_yenile()
+
+    def _not_disler_yenile(self):
+        """Aktiv pasientin qeyd dəftərinə görə Plan/Müalicə xəritələrindəki
+        '#NN' nida nişanlarını təzələyir (qeyd əlavə/silinəndə çağırılır)."""
+        if not self.aktif_hid: return
+        disler = _not_edilmis_disler(self.hastalar[self.aktif_hid])
+        self.arch0.not_disler = disler
+        self.arch0.ciz()
+        self.arch1.not_disler = disler
+        self.arch1.ciz()
 
     def _build_rontgen(self):
         self.p3.grid_columnconfigure(0,weight=1)
@@ -3486,6 +3577,85 @@ class DentalApp(ctk.CTk):
 
     # ── FOTO (intraoral / üz) ─────────────────────────────────────────────────
 
+    def _foto_ad_unikallasdir(self, ad, haric=None):
+        """Yazılan foto adını əsas (ilk) diş nömrəsinə görə aktiv vakadakı
+        (ilkin+plan+tedavi) mövcud fotolarla toqquşmayacaq şəkildə unikallaşdırır —
+        toqquşma varsa ardıcıl '.N' şəkkisi əlavə edir (#36 -> #36.1 -> #36.2 ...).
+        `haric`: unikallıq sayılarkən nəzərə ALINMAYACAQ foto obyekti (öz adını
+        dəyişdirərkən özü ilə toqquşmasın deyə)."""
+        ad = (ad or "").strip()
+        ilk = _foto_ilk_dis(ad)
+        if ilk is None or not self.aktif_hid or not self.aktif_vid:
+            return ad
+        vaka = self.hastalar[self.aktif_hid]["vakalar"][self.aktif_vid]
+        mevcud = 0
+        for key in ("fotolar_ilkin", "fotolar_plan", "fotolar_tedavi"):
+            for f in vaka.get(key, []) or []:
+                if f is haric:
+                    continue
+                if _foto_ilk_dis(f.get("dosya", "")) == ilk:
+                    mevcud += 1
+        if mevcud == 0:
+            return ad
+        tokens = ad.split(" ", 1)
+        tokens[0] = f"{tokens[0]}.{mevcud}"
+        return " ".join(tokens)
+
+    def _foto_ad_dialogu(self, mevcut_ad, basliq, on_kaydet):
+        """Foto adlandırma dialoqu — giriş sahəsi '#' ilə başlayır (ya da mövcud
+        adla doldurulur), space basılanda avtomatik yeni '#' əlavə edir (çox-dişli
+        foto adları üçün, məs. '#36 #35 #34'). Saxla basılanda unikallaşdırılmış
+        adı `on_kaydet(ad)` callback-inə ötürür."""
+        dlg = ctk.CTkToplevel(self, fg_color=TH["bg"])
+        dlg.title(basliq)
+        dlg.geometry("380x150")
+        dlg.attributes("-topmost", True)
+        dlg.grab_set()
+        ctk.CTkLabel(dlg, text=t("Foto adı (diş nömrəsi ilə, məs: #36 #35)"),
+                     font=ctk.CTkFont(size=11), text_color=TH["txt_sub"]).pack(
+                     padx=16, pady=(16, 4), anchor="w")
+        e = ctk.CTkEntry(dlg, height=34, corner_radius=8,
+                          border_color=TH["accent_soft"], fg_color=TH["panel_soft"])
+        e.pack(padx=16, pady=4, fill="x")
+        e.insert(0, mevcut_ad or "#")
+        e.icursor("end")
+        e.focus_set()
+
+        def _space_sonrasi_hash(event):
+            pos = e.index("insert")
+            e.insert(pos, " #")
+            e.icursor(pos + 2)
+            return "break"
+        e.bind("<KeyPress-space>", _space_sonrasi_hash)
+
+        def _kaydet():
+            yeni = e.get().strip()
+            dlg.destroy()
+            if yeni:
+                on_kaydet(yeni)
+        e.bind("<Return>", lambda ev: _kaydet())
+
+        btn_f = ctk.CTkFrame(dlg, fg_color="transparent")
+        btn_f.pack(fill="x", padx=16, pady=(10, 16))
+        ctk.CTkButton(btn_f, text=t("Saxla"), command=_kaydet, height=30,
+                      fg_color=TH["accent"], hover_color=TH["accent_hover"]).pack(side="right")
+        ctk.CTkButton(btn_f, text=t("İmtina"), command=dlg.destroy, height=30,
+                      fg_color=TH["panel_soft"], hover_color=TH["sidebar_row"],
+                      text_color=TH["txt"]).pack(side="right", padx=(0, 8))
+        dlg.update_idletasks()
+        sw, sh = dlg.winfo_screenwidth(), dlg.winfo_screenheight()
+        dlg.geometry(f"+{(sw-dlg.winfo_width())//2}+{(sh-dlg.winfo_height())//2}")
+        self._pencereni_one_cek(dlg)
+
+    def _foto_yenidenadlandir(self, foto):
+        """Mövcud bir fotonun adını dəyişdirmək üçün adlandırma dialoqunu açır
+        (foto kartındakı ad yazısına klikləndikdə çağırılır)."""
+        def _kaydet_et(ad):
+            foto["dosya"] = self._foto_ad_unikallasdir(ad, haric=foto)
+            veri_kaydet(self.hastalar)
+            self._foto_guncelle()
+        self._foto_ad_dialogu(foto.get("dosya", "#"), t("Foto Adlandır"), _kaydet_et)
+
     def _foto_ekle(self, tab):
         if not self.aktif_hid or not self.aktif_vid: return
         from tkinter import filedialog, messagebox
@@ -3506,16 +3676,21 @@ class DentalApp(ctk.CTk):
         vaka = self.hastalar[self.aktif_hid]["vakalar"][self.aktif_vid]
         key  = {"plan": "fotolar_plan", "tedavi": "fotolar_tedavi",
                 "ilkin": "fotolar_ilkin"}[tab]
-        vaka.setdefault(key,[]).append({
-            "tarih": datetime.now().strftime("%d.%m.%Y %H:%M"),
-            "dosya": os.path.splitext(os.path.basename(dosya))[0] + ".jpg",
-            "data":  b64,
-        })
-        veri_kaydet(self.hastalar)
-        self._foto_guncelle()
+
+        def _kaydet_et(ad):
+            ad = self._foto_ad_unikallasdir(ad)
+            vaka.setdefault(key, []).append({
+                "tarih": datetime.now().strftime("%d.%m.%Y %H:%M"),
+                "dosya": ad,
+                "data":  b64,
+            })
+            veri_kaydet(self.hastalar)
+            self._foto_guncelle()
+
+        self._foto_ad_dialogu("#", t("Foto Adlandır"), _kaydet_et)
 
     def _foto_guncelle(self):
-        for scroll in (self.foto_scroll_p0, self.foto_scroll_p1, self.foto_scroll_pI):
+        for scroll in (self.foto_scroll_p1, self.foto_scroll_pI):
             for w in scroll.winfo_children(): w.destroy()
         if not self.aktif_hid or not self.aktif_vid: return
         vaka = self.hastalar[self.aktif_hid]["vakalar"].get(self.aktif_vid, {})
@@ -3552,9 +3727,12 @@ class DentalApp(ctk.CTk):
                          if row_start+c < len(fotolar))):
                     kart = ctk.CTkFrame(row_f, fg_color=TH["panel"], corner_radius=8)
                     kart.pack(side="left", padx=2, pady=2, anchor="n")
-                    ctk.CTkLabel(kart, text=foto.get("dosya",""),
+                    ad_lbl = ctk.CTkLabel(kart, text=foto.get("dosya",""),
                                  font=ctk.CTkFont(size=9,weight="bold"),
-                                 wraplength=THUMB).pack(padx=4,pady=(4,0))
+                                 text_color=TH["accent"], cursor="hand2",
+                                 wraplength=THUMB)
+                    ad_lbl.pack(padx=4,pady=(4,0))
+                    ad_lbl.bind("<Button-1>", lambda e, fd=foto: self._foto_yenidenadlandir(fd))
                     ctk.CTkLabel(kart, text=foto.get("tarih",""),
                                  font=ctk.CTkFont(size=8),
                                  text_color="#999").pack(padx=4,pady=(0,2))
@@ -3581,50 +3759,147 @@ class DentalApp(ctk.CTk):
                                    command=lambda ix=i, t=tab: self._foto_sil(ix, t)).pack(
                                    anchor="e", padx=4, pady=(1,4))
 
-        _render(self.foto_scroll_p0, vaka.get("fotolar_plan",   []), "plan")
         _render(self.foto_scroll_p1, vaka.get("fotolar_tedavi", []), "tedavi")
         _render(self.foto_scroll_pI, vaka.get("fotolar_ilkin",  []), "ilkin")
 
-    def _foto_tam_goster(self, foto):
-        from PIL import Image, ImageTk
+    def _galeri_qur(self):
+        """Aktiv vaka/pasient üçün bütün foto+rentgen elementlərini (tip, obyekt)
+        cütləri olaraq qaytarır — tam-ekran baxıcıdakı irəli/geri naviqasiya və
+        foto<->rentgen keçidi üçün (bax _foto_tam_goster)."""
+        if not self.aktif_hid or not self.aktif_vid: return []
+        h = self.hastalar[self.aktif_hid]
+        vaka = h.get("vakalar", {}).get(self.aktif_vid, {})
+        galeri = []
+        for key in ("fotolar_ilkin", "fotolar_plan", "fotolar_tedavi"):
+            for f in vaka.get(key, []) or []:
+                galeri.append(("foto", f))
+        for r in h.get("rontgenler", []) or []:
+            galeri.append(("rontgen", r))
+        return galeri
+
+    def _dis_foto_galerisi(self, n):
+        """Adında (istənilən yerdə) '#n' istinadı olan bütün foto/rentgenləri
+        (tip, obyekt) cütləri olaraq, tam qalereyadakı sırada qaytarır — çox-dişli
+        adlar da (məs. '#36 #35 #34') n==34/35/36 üçün uyğun gəlir."""
+        return [(tip, obj) for tip, obj in self._galeri_qur()
+                if n in _foto_dis_nomreleri(obj.get("dosya", ""))]
+
+    def _dis_uzun_bas1(self, n):
+        """Müalicə və ya İlkin Vəziyyət tabında dişə 0.5s basılı saxlananda,
+        adında həmin diş nömrəsi olan foto/rentgen(lər) varsa, onları (yalnız bu
+        dişə aid olanları) tam-ekranda naviqasiya ilə açır — hansı dişin üstündə
+        basılmışıqsa, onun şəkilləri arasında ardıcıl baxıla bilsin deyə."""
+        galeri = self._dis_foto_galerisi(n)
+        if not galeri:
+            return
+        tip, obj = galeri[0]
+        self._foto_tam_goster(obj, tip=tip, galeri=galeri, idx=0)
+
+    def _foto_tam_goster(self, foto, tip="foto", galeri=None, idx=None):
+        from PIL import Image, ImageTk, ImageFilter, ImageEnhance
         from io import BytesIO
         if self._foto_win is not None and self._foto_win.winfo_exists():
             try: self._foto_win.destroy()
             except Exception: pass
             self._foto_win = None
+        if galeri is None:
+            galeri = self._galeri_qur()
+            idx = next((i for i, (_tp, ob) in enumerate(galeri) if ob is foto), None)
+        if idx is None:
+            galeri, idx = [(tip, foto)], 0
+
         pencere = tk.Toplevel(self)
         self._foto_win = pencere
-        pencere.title(foto.get("dosya","Foto"))
         pencere.configure(bg="black")
         sw = pencere.winfo_screenwidth()
         sh = pencere.winfo_screenheight()
-        img   = Image.open(BytesIO(self._img_bytes(foto))).convert("RGB")
-        ratio = min((sw-100)/img.width, (sh-100)/img.height, 1.0)
-        img   = img.resize((int(img.width*ratio), int(img.height*ratio)), Image.LANCZOS)
-        photo = ImageTk.PhotoImage(img)
-        canvas = tk.Canvas(pencere, width=img.width, height=img.height,
-                           bg="black", highlightthickness=0)
+        # Pəncərə ölçüsü BÜTÜN qalereya üçün sabitdir (şəkildən şəkilə dəyişmir) —
+        # fərqli nisbətli (ensiz/enli) fotolar bu ölçüyə "contain" olaraq sığdırılır,
+        # boş qalan kənarlar isə şəklin özünün bulanıqlaşdırılmış "cover" fonu ilə
+        # doldurulur (qara zolaq əvəzinə).
+        FW = min(int(sw * 0.62), 1500)
+        FH = min(int(sh * 0.72), 950)
+
+        canvas = tk.Canvas(pencere, width=FW, height=FH, bg="black", highlightthickness=0)
         canvas.pack()
-        canvas.create_image(0,0,anchor="nw",image=photo)
-        canvas._img = photo
         alt = tk.Frame(pencere, bg="#111")
         alt.pack(fill="x")
-        tk.Label(alt, text=foto.get("dosya",""), fg="white", bg="#111",
-                 font=("Arial",11)).pack(side="left",padx=10,pady=6)
-        tk.Label(alt, text=foto.get("tarih",""), fg="#888", bg="#111",
-                 font=("Arial",10)).pack(side="left",padx=4)
+        ad_lbl = tk.Label(alt, fg="white", bg="#111", font=("Arial", 11))
+        ad_lbl.pack(side="left", padx=10, pady=6)
+        tarix_lbl = tk.Label(alt, fg="#888", bg="#111", font=("Arial", 10))
+        tarix_lbl.pack(side="left", padx=4)
+        konum_lbl = tk.Label(alt, fg="#888", bg="#111", font=("Arial", 10))
+        konum_lbl.pack(side="left", padx=12)
+
         def _kapat():
             if self._foto_win is pencere:
                 self._foto_win = None
             pencere.destroy()
+
+        durum = {"idx": idx}
+
+        def _goster(i):
+            durum["idx"] = i
+            tp, ob = galeri[i]
+            try:
+                img = Image.open(BytesIO(self._img_bytes(ob))).convert("RGB")
+            except Exception as exc:
+                from tkinter import messagebox
+                messagebox.showerror(t("Yükleme Hatası"), f"Şəkil açılmadı:\n{exc}")
+                return
+            # Arxa fon: şəkli FW×FH-i tam örtəcək (cover) nisbətdə böyüdüb mərkəzdən
+            # kəsir, sonra bulanıqlaşdırıb bir az tündləşdirir.
+            bg_oran = max(FW / img.width, FH / img.height)
+            bg = img.resize((max(1, round(img.width * bg_oran)),
+                             max(1, round(img.height * bg_oran))), Image.LANCZOS)
+            bx0, by0 = (bg.width - FW) // 2, (bg.height - FH) // 2
+            bg = bg.crop((bx0, by0, bx0 + FW, by0 + FH))
+            bg = bg.filter(ImageFilter.GaussianBlur(30))
+            bg = ImageEnhance.Brightness(bg).enhance(0.55)
+            # Ön plan: şəkli FW×FH-ə tam sığacaq (contain) nisbətdə kiçildib mərkəzə yerləşdirir.
+            fg_oran = min(FW / img.width, FH / img.height, 1.0)
+            fg = img.resize((max(1, round(img.width * fg_oran)),
+                             max(1, round(img.height * fg_oran))), Image.LANCZOS)
+            bg.paste(fg, ((FW - fg.width) // 2, (FH - fg.height) // 2))
+            photo = ImageTk.PhotoImage(bg)
+            canvas.delete("all")
+            canvas.create_image(0, 0, anchor="nw", image=photo)
+            canvas._img = photo
+            tip_etiketi = t("🩻 Rentgen") if tp == "rontgen" else t("📷 Foto")
+            pencere.title(f"{tip_etiketi} — {ob.get('dosya','')}")
+            ad_lbl.configure(text=f"{tip_etiketi} — {ob.get('dosya','')}")
+            tarix_lbl.configure(text=ob.get("tarih", ""))
+            konum_lbl.configure(text=f"{i+1} / {len(galeri)}" if len(galeri) > 1 else "")
+
+        def _naviqasiya(delta):
+            if len(galeri) > 1:
+                _goster((durum["idx"] + delta) % len(galeri))
+
+        if len(galeri) > 1:
+            tk.Button(pencere, text="◀", command=lambda: _naviqasiya(-1),
+                      bg="#222", fg="white", activebackground="#333", activeforeground="white",
+                      relief="flat", bd=0, font=("Arial", 18), width=2).place(
+                      relx=0.0, rely=0.46, anchor="w", x=6)
+            tk.Button(pencere, text="▶", command=lambda: _naviqasiya(1),
+                      bg="#222", fg="white", activebackground="#333", activeforeground="white",
+                      relief="flat", bd=0, font=("Arial", 18), width=2).place(
+                      relx=1.0, rely=0.46, anchor="e", x=-6)
+
         tk.Button(alt, text="Kapat", command=_kapat,
                   bg="#333", fg="white", relief="flat", padx=12).pack(
                   side="right", padx=10, pady=6)
-        pencere.bind("<Escape>",   lambda e: _kapat())
-        pencere.bind("<Button-1>", lambda e: _kapat())
+        # Foto sahəsinə klik artıq bağlamır (yalnız "Kapat" düyməsi/Esc) — şəkli
+        # yaxından baxmaq/klikləmək istəyəndə pəncərə səhvən bağlanmasın deyə.
+        pencere.bind("<Escape>",  lambda e: _kapat())
+        pencere.bind("<Left>",    lambda e: _naviqasiya(-1))
+        pencere.bind("<Right>",   lambda e: _naviqasiya(1))
         pencere.protocol("WM_DELETE_WINDOW", _kapat)
+
+        # Pəncərə ölçüsü sabit olduğundan yerləşdirmə YALNIZ bir dəfə hesablanır —
+        # şəkillər arasında keçiddə pəncərə sıçramır/ölçü dəyişmir.
         pencere.update_idletasks()
         pencere.geometry(f"+{(sw-pencere.winfo_width())//2}+{(sh-pencere.winfo_height())//2}")
+        _goster(idx)
         self._pencereni_one_cek(pencere)
 
     def _foto_sil(self, idx, tab):
@@ -3647,6 +3922,7 @@ class DentalApp(ctk.CTk):
         for tid,lbl,rgb in TEDAVILER:
             if tid in ("kok", "curuk") and tab != "ilkin": continue
             if tid == "gozlem" and tab == "ilkin": continue
+            if tid == "cekim" and tab == "ilkin": continue   # çəkim bir müalicə əməliyyatıdır, ilkin (diaqnostik) vəziyyətə aid deyil
             renk=f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}" if rgb else "#888888"
             metin = t(lbl)
             btn_w = max(76, 16 + len(metin) * 8)   # uzun etiketlər (məs. "Kompozit Dolğu") sığsın
@@ -3861,6 +4137,86 @@ class DentalApp(ctk.CTk):
             return tid
         return "tac"
 
+    def _tedavi_tarix_qruplari(self, n, durum):
+        """Seçili dişin CARİ vəziyyətini tərkib hissələrinə ayırıb, hər hissəni
+        tedavi_tarixce-dəki ən son uyğun qeydin tarixinə görə qruplaşdırır — eyni
+        tarixdə edilənlər bir qrupda (sətirdə, aralarında '+'), fərqli tarixdə
+        edilənlər ayrı qruplarda (sətirlərdə) göstərilsin deyə. Tarixi tapılmayan
+        (köhnə/idxal edilmiş məlumat) hissələr tarixsiz son qrupda toplanır.
+        Qaytarır: [(tarix_or_"", [mətn, ...]), ...] — ən yeni tarix əvvəldə."""
+        parcalar = []   # [(kateqoriya, mətn), ...] — dis_durum_str ilə eyni məntiq
+        if durum.get("kanal"): parcalar.append(("kanal", t("Kanal")))
+        tac = durum.get("tac", "saglikli")
+        if tac == "curuk":
+            parcalar.append(("curuk", t("Çürük")))
+        elif tac == "dolgu":
+            parcalar.append(("dolgu", t("Kompozit Dolğu")))
+        elif tac and tac != "saglikli":
+            for tid,lbl,_ in TEDAVILER:
+                if tid == tac:
+                    parcalar.append(("tac", t(lbl))); break
+        if durum.get("dolgu") and tac != "dolgu":
+            parcalar.append(("dolgu", t("Kompozit Dolğu") + "(" + "".join(durum["dolgu"]) + ")"))
+        if durum.get("curuk") and tac != "curuk":
+            parcalar.append(("curuk", t("Çürük") + "(" + "".join(durum["curuk"]) + ")"))
+        if durum.get("kron"): parcalar.append(("kron", t("Qapaq")))
+        if not parcalar:
+            return []
+
+        vaka = self.hastalar.get(self.aktif_hid, {}).get("vakalar", {}).get(self.aktif_vid, {})
+        tarixce = vaka.get("tedavi_tarixce", [])
+
+        def _tarix_tap(kateqoriya):
+            for kayit in reversed(tarixce):
+                if kayit.get("dis") == n and kayit.get("kateqoriya") == kateqoriya:
+                    return kayit.get("tarix", "")
+            return ""
+
+        qrup_dict, qrup_sira = {}, []
+        for kateqoriya, metin in parcalar:
+            tarix = _tarix_tap(kateqoriya)
+            if tarix not in qrup_dict:
+                qrup_dict[tarix] = []
+                qrup_sira.append(tarix)
+            qrup_dict[tarix].append(metin)
+
+        def _tarix_key(t_str):
+            try: return datetime.strptime(t_str, "%d.%m.%Y")
+            except (ValueError, TypeError): return datetime.min
+        qrup_sira.sort(key=_tarix_key, reverse=True)   # ən yeni tarix əvvəldə, tarixsiz sonda
+        return [(tarix, qrup_dict[tarix]) for tarix in qrup_sira]
+
+    def _dis_info1_render(self, n, durum):
+        """Müalicə tabındakı 'Seçili Diş' panelini doldurur: eyni tarixdə edilən
+        əməliyyatlar '+' ilə bir sətirdə (yer çatmasa üfüqi scroll ilə), fərqli
+        tarixdə edilənlər ayrı sətirlərdə göstərilir (bax _tedavi_tarix_qruplari)."""
+        for w in self.dis_info1_f.winfo_children(): w.destroy()
+        if n is None:
+            ctk.CTkLabel(self.dis_info1_f, text="—", font=ctk.CTkFont(size=14,weight="bold"),
+                         text_color=TH["txt"]).pack(pady=4)
+            return
+        ctk.CTkLabel(self.dis_info1_f, text=f"{t('Diş')} {n}\n{dis_adi(n)}",
+                     font=ctk.CTkFont(size=14,weight="bold"), text_color=TH["txt"],
+                     justify="center").pack(pady=(4,6))
+        qruplar = self._tedavi_tarix_qruplari(n, durum)
+        if not qruplar:
+            ctk.CTkLabel(self.dis_info1_f, text=t("Sağlam"), font=ctk.CTkFont(size=13,weight="bold"),
+                         text_color=TH["txt"]).pack()
+            return
+        for tarix, metinler in qruplar:
+            if tarix:
+                ctk.CTkLabel(self.dis_info1_f, text=tarix, font=ctk.CTkFont(size=10),
+                             text_color=TH["txt_faint"]).pack(anchor="w", padx=2, pady=(6,0))
+            sira_f = ctk.CTkScrollableFrame(self.dis_info1_f, fg_color="transparent",
+                                             orientation="horizontal", height=32)
+            sira_f.pack(fill="x", padx=0, pady=(0,2))
+            for i, metin in enumerate(metinler):
+                if i > 0:
+                    ctk.CTkLabel(sira_f, text="+", font=ctk.CTkFont(size=13,weight="bold"),
+                                 text_color=TH["accent"]).pack(side="left", padx=3)
+                ctk.CTkLabel(sira_f, text=metin, font=ctk.CTkFont(size=13,weight="bold"),
+                             text_color=TH["txt"]).pack(side="left", padx=1)
+
     def _tedavi_geri_al_mi(self, eski, tid, zone):
         """Bu klik, artıq qeyd olunmuş bir müalicəni GERİ ALACAQ (söndürəcək) mi?"""
         if tid == "saglikli":
@@ -3930,8 +4286,7 @@ class DentalApp(ctk.CTk):
                                  "kateqoriya": kateqoriya})
         veri_kaydet(self.hastalar)
         self.arch1.set_tedavi(n, mevcut)
-        metin = dis_durum_str(mevcut)
-        self.dis_info1.configure(text=f"{t('Diş')} {n}\n{dis_adi(n)}\n{metin}")
+        self._dis_info1_render(n, mevcut)
         self._plan_guncelle1()
 
     def _plan_guncelle1(self):
@@ -4116,6 +4471,10 @@ class DentalApp(ctk.CTk):
         self.arch1.tedaviler = {}
         self.arch2.tedaviler = {}
         _img_cache.clear()
+        # Qeyd dəftərində "#NN" ilə istinad olunan dişlər — Plan/Müalicə xəritələrində nida nişanı
+        not_disler = _not_edilmis_disler(h)
+        self.arch0.not_disler = not_disler
+        self.arch1.not_disler = not_disler
         # Sonra yükle — her arch kendi bağımsız bayrağıyla
         self.arch0.yukle(plan_data,   dis_tasi=dis_tasi_plan)
         self.arch1.yukle(tedavi_data, dis_tasi=dis_tasi_tedavi)
@@ -4159,10 +4518,10 @@ class DentalApp(ctk.CTk):
             self.arch1.secili = n1
             self.arch1.ciz()
             durum = normalize_state(tedavi_data.get(str(n1), {}))
-            self.dis_info1.configure(text=f"{t('Diş')} {n1}\n{dis_adi(n1)}\n{dis_durum_str(durum)}")
+            self._dis_info1_render(n1, durum)
         else:
             self.arch1.secili = None
-            self.dis_info1.configure(text="—")
+            self._dis_info1_render(None, None)
         nI = self._last_dis_ilkin.get((hid, vid))
         if nI is None and ilkin_data:
             nI = int(min(ilkin_data.keys(), key=int))
