@@ -210,7 +210,6 @@ TRANSLATIONS = {
     "Buluddan Hasta Seç": {"en": "Select Patient from Cloud", "ru": "Выбрать пациента из облака", "tr": "Buluttan Hasta Seç"},
     "Daha Sonra": {"en": "Later", "ru": "Позже", "tr": "Daha Sonra"},
     "Defolt Rənglərə Sıfırla": {"en": "Reset to Default Colors", "ru": "Сбросить к цветам по умолчанию", "tr": "Varsayılan Renklere Sıfırla"},
-    "Dental Tedavi Planlama": {"en": "Dental Treatment Planning", "ru": "Планирование стоматологического лечения", "tr": "Dental Tedavi Planlama"},
     "E-poçt": {"en": "Email", "ru": "Эл. почта", "tr": "E-posta"},
     "Foto yoxdur": {"en": "No photo", "ru": "Нет фото", "tr": "Foto yok"},
     "Geçersiz Dosya": {"en": "Invalid File", "ru": "Недопустимый файл", "tr": "Geçersiz Dosya"},
@@ -2899,7 +2898,7 @@ class ArchCanvas(tk.Canvas):
 class DentalApp(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title(t("Dental Tedavi Planlama"))
+        self.title("Digipex")
         try:
             if os.path.exists(ICON_FILE): self.iconbitmap(ICON_FILE)
         except Exception: pass
@@ -6352,7 +6351,7 @@ class DentalApp(ctk.CTk):
         import tkinter.filedialog, tkinter.messagebox
         dosya = tkinter.filedialog.askopenfilename(
             title="Hasta Projesi Yükle",
-            filetypes=[("BlueX Dental Projesi", "*.bxd"), ("Tüm Dosyalar", "*.*")],
+            filetypes=[("Digipex Dental Projesi", "*.bxd"), ("Tüm Dosyalar", "*.*")],
         )
         if not dosya: return
         try:

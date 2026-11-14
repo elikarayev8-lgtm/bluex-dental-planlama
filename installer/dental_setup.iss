@@ -1,7 +1,7 @@
-; BlueX Dental Planlama — Inno Setup kurulum betiği
+; Digipex — Inno Setup kurulum betiği
 ; Derleme: ISCC.exe dental_setup.iss  (çıktı: installer\BlueXDental_Setup.exe)
 
-#define AppName "BlueX Dental Planlama"
+#define AppName "Digipex"
 #define AppVersion "1.2.10"
 #define AppExe "dental_planlama.exe"
 
@@ -9,7 +9,7 @@
 AppId={{7B2F4E9A-6C1D-4A8B-9E3F-BLUEXDENTAL1}
 AppName={#AppName}
 AppVersion={#AppVersion}
-AppPublisher=BlueX
+AppPublisher=Digipex
 DefaultDirName={localappdata}\BlueXDental
 DefaultGroupName={#AppName}
 ; yönetici gerektirmesin — klinik bilgisayarlarında admin şifresi sorunu olmasın
