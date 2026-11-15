@@ -539,7 +539,10 @@ def xray_subdir_only():
     return AYARLAR.get("alt_klasor_sarti", True)
 
 def sesli_asistent_aktiv():
-    return bool(AYARLAR.get("sesli_asistent_aktiv", False))
+    # Hələlik müvəqqəti olaraq deaktiv edilib (istifadəçi tələbi) — saxlanmış ayar
+    # nə olursa olsun, avtomatik başlamır; ayarlar dialoqundan əl ilə aktivləşdirmək
+    # yenə mümkündür, sadəcə açılışda özbaşına işə düşmür.
+    return False
 
 def sesli_oyadici_soz():
     return (AYARLAR.get("sesli_oyadici_soz") or "bulex").strip().lower()
@@ -3499,63 +3502,13 @@ class DentalApp(ctk.CTk):
             self._vr_xray_idx[self.aktif_hid] = idx
             self._push_vr_xray_by_index(self.aktif_hid, idx)
             self._xray_vr_nav_label_guncelle()
-        self._rontgen_tam_goster(r)
-
-    def _rontgen_tam_goster(self, r):
-        """Rentgeni tam ekran popup'ta göstər"""
-        import base64
-        from PIL import Image, ImageTk
-        from io import BytesIO
-
-        pencere = tk.Toplevel(self)
-        pencere.title(r.get("dosya","Rentgen"))
-        pencere.configure(bg="black")
-
-        # Ekran boyutunu al
-        sw = pencere.winfo_screenwidth()
-        sh = pencere.winfo_screenheight()
-
-        img_data = self._img_bytes(r)
-        img = Image.open(BytesIO(img_data)).convert("RGB")
-
-        # Ekrana sığdır
-        max_w = sw - 100
-        max_h = sh - 100
-        ratio = min(max_w/img.width, max_h/img.height, 1.0)
-        new_w = int(img.width*ratio)
-        new_h = int(img.height*ratio)
-        img = img.resize((new_w, new_h), Image.LANCZOS)
-
-        photo = ImageTk.PhotoImage(img)
-
-        canvas = tk.Canvas(pencere, width=new_w, height=new_h,
-                           bg="black", highlightthickness=0)
-        canvas.pack()
-        canvas.create_image(0, 0, anchor="nw", image=photo)
-        canvas._img = photo  # referans tut
-
-        # Bilgi + kapat
-        alt = tk.Frame(pencere, bg="#111")
-        alt.pack(fill="x")
-        tk.Label(alt, text=r.get("dosya",""),
-                 fg="white", bg="#111",
-                 font=("Arial",11)).pack(side="left", padx=10, pady=6)
-        tk.Label(alt, text=r.get("tarih",""),
-                 fg="#888", bg="#111",
-                 font=("Arial",10)).pack(side="left", padx=4)
-        tk.Button(alt, text="Kapat", command=pencere.destroy,
-                  bg="#333", fg="white",
-                  relief="flat", padx=12).pack(side="right", padx=10, pady=6)
-
-        # ESC ile kapat
-        pencere.bind("<Escape>", lambda e: pencere.destroy())
-        pencere.bind("<Button-1>", lambda e: pencere.destroy())
-
-        # Pencereyi ortala
-        pencere.update_idletasks()
-        x = (sw - pencere.winfo_width()) // 2
-        y = (sh - pencere.winfo_height()) // 2
-        pencere.geometry(f"+{x}+{y}")
+        # Qalereyadakı (tedavi/ilkin fotoları + rentgenlər) eyni tam-ekran baxıcıdan
+        # istifadə edir ki, zoom/pan və "klik bağlamır" davranışı hər yerdə eyni olsun
+        # (əvvəllər ayrıca `_rontgen_tam_goster` var idi, köhnə/təkrarlanan idi).
+        galeri = self._galeri_qur()
+        idx_g = next((i for i, (_tp, ob) in enumerate(galeri) if ob is r), None)
+        self._foto_tam_goster(r, tip="rontgen", galeri=galeri if idx_g is not None else None,
+                              idx=idx_g)
 
     def _rontgen_sil(self,idx):
         if not self.aktif_hid: return
@@ -3836,6 +3789,34 @@ class DentalApp(ctk.CTk):
             pencere.destroy()
 
         durum = {"idx": idx}
+        cur = {}          # aktiv şəklin keşlənmiş PIL datası (img/bg/fit_oran) + zoom/pan vəziyyəti
+        ZOOM_MAX = 6.0
+
+        def _render_view():
+            img, bg = cur["img"], cur["bg"]
+            fit_oran, view = cur["fit_oran"], cur["view"]
+            total_scale = fit_oran * view["zoom"]
+            # görünən pəncərə (image koordinatında) — zoom artdıqca kiçilir (daha yaxından baxılır)
+            vw = min(FW / total_scale, img.width)
+            vh = min(FH / total_scale, img.height)
+            cx = view["cx"] if vw < img.width else img.width / 2.0
+            cy = view["cy"] if vh < img.height else img.height / 2.0
+            if vw < img.width:
+                cx = min(max(cx, vw / 2.0), img.width - vw / 2.0)
+            if vh < img.height:
+                cy = min(max(cy, vh / 2.0), img.height - vh / 2.0)
+            view["cx"], view["cy"] = cx, cy
+            x0, y0 = cx - vw / 2.0, cy - vh / 2.0
+            crop = img.crop((round(x0), round(y0), round(x0 + vw), round(y0 + vh)))
+            disp_w = max(1, round(vw * total_scale))
+            disp_h = max(1, round(vh * total_scale))
+            fg = crop.resize((disp_w, disp_h), Image.LANCZOS)
+            composed = bg.copy()
+            composed.paste(fg, ((FW - disp_w) // 2, (FH - disp_h) // 2))
+            photo = ImageTk.PhotoImage(composed)
+            canvas.delete("all")
+            canvas.create_image(0, 0, anchor="nw", image=photo)
+            canvas._img = photo
 
         def _goster(i):
             durum["idx"] = i
@@ -3847,7 +3828,8 @@ class DentalApp(ctk.CTk):
                 messagebox.showerror(t("Yükleme Hatası"), f"Şəkil açılmadı:\n{exc}")
                 return
             # Arxa fon: şəkli FW×FH-i tam örtəcək (cover) nisbətdə böyüdüb mərkəzdən
-            # kəsir, sonra bulanıqlaşdırıb bir az tündləşdirir.
+            # kəsir, sonra bulanıqlaşdırıb bir az tündləşdirir — zoom/pan-dan asılı
+            # olmayan sabit arxa fondur (yalnız ön plan şəkli yaxınlaşdırılır/sürüklənir).
             bg_oran = max(FW / img.width, FH / img.height)
             bg = img.resize((max(1, round(img.width * bg_oran)),
                              max(1, round(img.height * bg_oran))), Image.LANCZOS)
@@ -3855,20 +3837,88 @@ class DentalApp(ctk.CTk):
             bg = bg.crop((bx0, by0, bx0 + FW, by0 + FH))
             bg = bg.filter(ImageFilter.GaussianBlur(30))
             bg = ImageEnhance.Brightness(bg).enhance(0.55)
-            # Ön plan: şəkli FW×FH-ə tam sığacaq (contain) nisbətdə kiçildib mərkəzə yerləşdirir.
-            fg_oran = min(FW / img.width, FH / img.height, 1.0)
-            fg = img.resize((max(1, round(img.width * fg_oran)),
-                             max(1, round(img.height * fg_oran))), Image.LANCZOS)
-            bg.paste(fg, ((FW - fg.width) // 2, (FH - fg.height) // 2))
-            photo = ImageTk.PhotoImage(bg)
-            canvas.delete("all")
-            canvas.create_image(0, 0, anchor="nw", image=photo)
-            canvas._img = photo
+            cur["img"] = img
+            cur["bg"] = bg
+            cur["fit_oran"] = min(FW / img.width, FH / img.height, 1.0)
+            cur["view"] = {"zoom": 1.0, "cx": img.width / 2.0, "cy": img.height / 2.0}
+            cur["_drag"] = None
+            _render_view()
             tip_etiketi = t("🩻 Rentgen") if tp == "rontgen" else t("📷 Foto")
             pencere.title(f"{tip_etiketi} — {ob.get('dosya','')}")
             ad_lbl.configure(text=f"{tip_etiketi} — {ob.get('dosya','')}")
             tarix_lbl.configure(text=ob.get("tarih", ""))
             konum_lbl.configure(text=f"{i+1} / {len(galeri)}" if len(galeri) > 1 else "")
+
+        def _zoom_at(canvas_x, canvas_y, faktor):
+            """Verilmiş kanvas koordinatına (siçanın harada olduğuna) doğru zoom
+            edir — o nöqtədəki şəkil pikseli, mümkün qədər, eyni ekran yerində qalır."""
+            view = cur["view"]
+            eski_zoom = view["zoom"]
+            yeni_zoom = min(max(eski_zoom * faktor, 1.0), ZOOM_MAX)
+            if abs(yeni_zoom - eski_zoom) < 1e-6:
+                return
+            img, fit_oran = cur["img"], cur["fit_oran"]
+            scale_eski = fit_oran * eski_zoom
+            vw0 = min(FW / scale_eski, img.width)
+            vh0 = min(FH / scale_eski, img.height)
+            dw0, dh0 = vw0 * scale_eski, vh0 * scale_eski
+            ox, oy = (FW - dw0) / 2.0, (FH - dh0) / 2.0
+            rel_x = min(max(canvas_x - ox, 0.0), dw0)
+            rel_y = min(max(canvas_y - oy, 0.0), dh0)
+            p_x = (view["cx"] - vw0 / 2.0) + rel_x / scale_eski
+            p_y = (view["cy"] - vh0 / 2.0) + rel_y / scale_eski
+
+            scale_yeni = fit_oran * yeni_zoom
+            vw1 = min(FW / scale_yeni, img.width)
+            vh1 = min(FH / scale_yeni, img.height)
+            dw1, dh1 = vw1 * scale_yeni, vh1 * scale_yeni
+            nx, ny = (FW - dw1) / 2.0, (FH - dh1) / 2.0
+            view["zoom"] = yeni_zoom
+            view["cx"] = p_x - (canvas_x - nx) / scale_yeni + vw1 / 2.0
+            view["cy"] = p_y - (canvas_y - ny) / scale_yeni + vh1 / 2.0
+            _render_view()
+
+        def _tekerlek(e):
+            # Siçan təkəri VƏ əksər noutbuk trackpadlərində iki-barmaq sürüşdürmə
+            # eyni hadisəni yaradır (Windows "presizyon trackpad" sürücüləri iki-barmaq
+            # "pinch" jestini də tez-tez Ctrl+Scroll kimi ötürür — <Control-MouseWheel>
+            # də aşağıda eyni funksiyaya bağlanıb). Dəyər nə qədər böyükdürsə faktor da
+            # bir qədər böyük olur (presizyon trackpadlərdə dəyişkən/kiçik gəlir).
+            faktor = 1.0 + max(-0.6, min(0.6, e.delta / 1200.0))
+            _zoom_at(e.x, e.y, faktor)
+
+        def _surukle_bas(e):
+            view = cur["view"]
+            cur["_drag"] = (e.x, e.y, view["cx"], view["cy"])
+
+        def _surukle_hereket(e):
+            drag = cur.get("_drag")
+            if not drag:
+                return
+            sx, sy, scx, scy = drag
+            view = cur["view"]
+            scale = cur["fit_oran"] * view["zoom"]
+            view["cx"] = scx - (e.x - sx) / scale
+            view["cy"] = scy - (e.y - sy) / scale
+            _render_view()
+
+        def _surukle_buraxildi(e):
+            cur["_drag"] = None
+
+        def _zoom_sifirla(e=None):
+            view = cur["view"]
+            if view["zoom"] != 1.0:
+                img = cur["img"]
+                view["zoom"] = 1.0
+                view["cx"], view["cy"] = img.width / 2.0, img.height / 2.0
+                _render_view()
+
+        canvas.bind("<MouseWheel>", _tekerlek)
+        canvas.bind("<Control-MouseWheel>", _tekerlek)
+        canvas.bind("<ButtonPress-1>", _surukle_bas)
+        canvas.bind("<B1-Motion>", _surukle_hereket)
+        canvas.bind("<ButtonRelease-1>", _surukle_buraxildi)
+        canvas.bind("<Double-Button-1>", _zoom_sifirla)
 
         def _naviqasiya(delta):
             if len(galeri) > 1:
@@ -3887,8 +3937,9 @@ class DentalApp(ctk.CTk):
         tk.Button(alt, text="Kapat", command=_kapat,
                   bg="#333", fg="white", relief="flat", padx=12).pack(
                   side="right", padx=10, pady=6)
-        # Foto sahəsinə klik artıq bağlamır (yalnız "Kapat" düyməsi/Esc) — şəkli
-        # yaxından baxmaq/klikləmək istəyəndə pəncərə səhvən bağlanmasın deyə.
+        # Foto sahəsinə klik artıq bağlamır (yalnız "Kapat" düyməsi/Esc) — sol düymə
+        # basılı sürükləmə indi zoom olunanda yan-yana baxmaq üçün istifadə olunur
+        # (yuxarıdakı canvas bind-ları), ikiqat klik isə zoom-u sıfırlayır.
         pencere.bind("<Escape>",  lambda e: _kapat())
         pencere.bind("<Left>",    lambda e: _naviqasiya(-1))
         pencere.bind("<Right>",   lambda e: _naviqasiya(1))
