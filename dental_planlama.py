@@ -298,6 +298,10 @@ TRANSLATIONS = {
     "DÜYMƏ (PUSH-TO-TALK)": {"en": "KEY (PUSH-TO-TALK)", "ru": "КЛАВИША (PUSH-TO-TALK)", "tr": "TUŞ (PUSH-TO-TALK)"},
     "SƏS (TTS)": {"en": "VOICE (TTS)", "ru": "ГОЛОС (TTS)", "tr": "SES (TTS)"},
     "AI Söhbət": {"en": "AI Chat", "ru": "Чат с AI", "tr": "AI Sohbet"},
+    "🔒 Hələlik kilidlənib — tezliklə aktivləşdiriləcək.": {
+        "en": "🔒 Temporarily locked — will be enabled soon.",
+        "ru": "🔒 Временно заблокировано — скоро будет включено.",
+        "tr": "🔒 Şimdilik kilitli — yakında etkinleştirilecek."},
     "Əvvəlcə yuxarıda Anthropic API açarını daxil edin.": {
         "en": "Please enter the Anthropic API key above first.",
         "ru": "Сначала введите ключ API Anthropic выше.",
@@ -598,7 +602,14 @@ def sesli_oyadici_soz():
     return (AYARLAR.get("sesli_oyadici_soz") or "bulex").strip().lower()
 
 def chat_asistent_aktiv():
-    return bool(AYARLAR.get("chat_asistent_aktiv", False))
+    # Hələlik müvəqqəti olaraq kilidlənib (istifadəçi tələbi) — ayarlarda saxlanmış
+    # dəyərdən asılı olmayaraq işləməyəcək, sonra açılacaq.
+    return False
+
+def vr_rejimi_aktiv():
+    # Hələlik müvəqqəti olaraq kilidlənib (istifadəçi tələbi) — ayarlarda saxlanmış
+    # dəyərdən asılı olmayaraq işləməyəcək, sonra açılacaq.
+    return False
 
 def chat_hotkey():
     return (AYARLAR.get("chat_hotkey") or "f9").strip().lower()
@@ -4779,7 +4790,7 @@ class DentalApp(ctk.CTk):
 
     def _vr_ui_guncelle(self):
         """Ayarlar'dakı 'VR Rejimi' açarına görə header'dəki 3 VR düyməsini göstərir/gizlədir."""
-        acit = bool(AYARLAR.get("vr_rejimi", False))
+        acit = vr_rejimi_aktiv()
         dugmeler = [(self._btn_tedaviye_kec, (14,4)),
                     (self._btn_vr_duzenle, (12,2)),
                     (self._btn_vr_layout, (2,4))]
@@ -5463,15 +5474,19 @@ class DentalApp(ctk.CTk):
         ctk.CTkLabel(t_umumi, text=t("VR REJİMİ"),
                      font=ctk.CTkFont(size=11, weight="bold"),
                      text_color=TH["accent"]).pack(anchor="w", pady=(0, 2))
-        vr_var = tk.BooleanVar(value=bool(AYARLAR.get("vr_rejimi", False)))
+        vr_var = tk.BooleanVar(value=False)
         def _vr_toggle():
             AYARLAR["vr_rejimi"] = bool(vr_var.get())
             ayar_kaydet(AYARLAR)
             self._vr_ui_guncelle()
-        ctk.CTkSwitch(t_umumi, text=t("Header-də \"Tedaviyə Keç / VR Düzenle / Layout Kaydet\" düymələrini göstər"),
+        ctk.CTkSwitch(t_umumi, text="🔒  " + t("Header-də \"Tedaviyə Keç / VR Düzenle / Layout Kaydet\" düymələrini göstər"),
                       variable=vr_var, onvalue=True, offvalue=False, command=_vr_toggle,
-                      font=ctk.CTkFont(size=11), text_color=TH["txt"],
-                      progress_color=TH["accent"]).pack(anchor="w", pady=(2, 10))
+                      state="disabled",
+                      font=ctk.CTkFont(size=11), text_color=TH["txt_faint"],
+                      progress_color=TH["accent"]).pack(anchor="w", pady=(2, 2))
+        ctk.CTkLabel(t_umumi, text=t("🔒 Hələlik kilidlənib — tezliklə aktivləşdiriləcək."),
+                     font=ctk.CTkFont(size=10), text_color=TH["txt_faint"],
+                     wraplength=480, justify="left").pack(anchor="w", pady=(0, 10))
 
         cloud_frame = ctk.CTkFrame(t_bulud, fg_color="transparent")
         cloud_frame.pack(fill="both", expand=True)
@@ -5848,7 +5863,7 @@ class DentalApp(ctk.CTk):
                      font=ctk.CTkFont(size=10), text_color=TH["txt_faint"],
                      wraplength=480, justify="left").pack(anchor="w", pady=(0, 6))
 
-        chat_aktiv_var = tk.BooleanVar(value=chat_asistent_aktiv())
+        chat_aktiv_var = tk.BooleanVar(value=False)
 
         def _chat_toggle():
             if chat_aktiv_var.get() and not (AYARLAR.get("anthropic_api_key") or "").strip():
@@ -5863,9 +5878,13 @@ class DentalApp(ctk.CTk):
             else:
                 self._chat_dayandir()
 
-        ctk.CTkCheckBox(t_sesli, text=t("Ümumi AI söhbətini aktivləşdir"),
+        ctk.CTkCheckBox(t_sesli, text="🔒  " + t("Ümumi AI söhbətini aktivləşdir"),
                         variable=chat_aktiv_var, font=ctk.CTkFont(size=12),
-                        text_color=TH["txt"], command=_chat_toggle).pack(anchor="w", pady=(0, 10))
+                        text_color=TH["txt_faint"], state="disabled",
+                        command=_chat_toggle).pack(anchor="w", pady=(0, 2))
+        ctk.CTkLabel(t_sesli, text=t("🔒 Hələlik kilidlənib — tezliklə aktivləşdiriləcək."),
+                     font=ctk.CTkFont(size=10), text_color=TH["txt_faint"],
+                     wraplength=480, justify="left").pack(anchor="w", pady=(0, 10))
 
         ctk.CTkLabel(t_sesli, text=t("DÜYMƏ (PUSH-TO-TALK)"), font=ctk.CTkFont(size=11, weight="bold"),
                      text_color=TH["accent"]).pack(anchor="w", pady=(4, 2))
