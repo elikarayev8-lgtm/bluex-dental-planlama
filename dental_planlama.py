@@ -514,6 +514,56 @@ TRANSLATIONS = {
         "en": "Photo name (with tooth number, e.g. #36 #35)",
         "ru": "Название фото (с номером зуба, напр. #36 #35)",
         "tr": "Foto adı (diş numarasıyla, örn: #36 #35)"},
+    "Qovluğa Export Et (Foto/Rentgen)": {
+        "en": "Export to Folder (Photos/X-rays)",
+        "ru": "Экспорт в папку (фото/рентген)",
+        "tr": "Klasöre Aktar (Foto/Röntgen)"},
+    "PDF Hesabat Yarat": {"en": "Create PDF Report", "ru": "Создать PDF-отчёт",
+                           "tr": "PDF Rapor Oluştur"},
+    "Export": {"en": "Export", "ru": "Экспорт", "tr": "Dışa Aktar"},
+    "Bu pasientdə heç bir foto/rentgen yoxdur.": {
+        "en": "This patient has no photos or x-rays.",
+        "ru": "У этого пациента нет фото или рентгенов.",
+        "tr": "Bu hastada hiç foto veya röntgen yok."},
+    "Bu pasientdə heç bir vaka yoxdur.": {
+        "en": "This patient has no case.",
+        "ru": "У этого пациента нет случая.",
+        "tr": "Bu hastada hiç vaka yok."},
+    "Export Qovluğu Seçin": {"en": "Choose Export Folder", "ru": "Выберите папку экспорта",
+                              "tr": "Dışa Aktarma Klasörünü Seçin"},
+    "fayl export olundu": {"en": "file(s) exported", "ru": "файл(ов) экспортировано",
+                            "tr": "dosya dışa aktarıldı"},
+    "Yüklənmədi": {"en": "Failed to load", "ru": "Не удалось загрузить", "tr": "Yüklenemedi"},
+    "Export Edildi": {"en": "Exported", "ru": "Экспортировано", "tr": "Dışa Aktarıldı"},
+    "PDF Hesabat Saxla": {"en": "Save PDF Report", "ru": "Сохранить PDF-отчёт",
+                           "tr": "PDF Raporu Kaydet"},
+    "PDF hesabat saxlanıldı": {"en": "PDF report saved", "ru": "PDF-отчёт сохранён",
+                                "tr": "PDF rapor kaydedildi"},
+    "Pasient Hesabatı": {"en": "Patient Report", "ru": "Отчёт о пациенте", "tr": "Hasta Raporu"},
+    "Cinsiyyət": {"en": "Gender", "ru": "Пол", "tr": "Cinsiyet"},
+    "Vaka Tarixi": {"en": "Case Date", "ru": "Дата случая", "tr": "Vaka Tarihi"},
+    "Hesabat Tarixi": {"en": "Report Date", "ru": "Дата отчёта", "tr": "Rapor Tarihi"},
+    "Çürük Statistikası": {"en": "Caries Statistics", "ru": "Статистика кариеса",
+                            "tr": "Çürük İstatistiği"},
+    "Approksimal (M/D)": {"en": "Approximal (M/D)", "ru": "Апроксимальный (M/D)",
+                           "tr": "Aproksimal (M/D)"},
+    "Oklüzal (O)": {"en": "Occlusal (O)", "ru": "Окклюзионный (O)", "tr": "Oklüzal (O)"},
+    "* Yalnız İlkin Vəziyyətdə qeyd olunmuş çürük səthlərinə əsasən.": {
+        "en": "* Based only on caries surfaces recorded in the Initial Condition.",
+        "ru": "* Только по поверхностям кариеса, отмеченным в Исходном состоянии.",
+        "tr": "* Yalnızca İlk Durum'da işaretlenen çürük yüzeylerine göre."},
+    "Diş Xəritəsi": {"en": "Tooth Map", "ru": "Карта зубов", "tr": "Diş Haritası"},
+    "İlkin": {"en": "Initial", "ru": "Исходное", "tr": "İlk"},
+    "Rentgenlər": {"en": "X-rays", "ru": "Рентгены", "tr": "Röntgenler"},
+    "İlkin Vəziyyət Foto/Rentgenləri": {
+        "en": "Initial Condition Photos/X-rays",
+        "ru": "Фото/рентгены исходного состояния",
+        "tr": "İlk Durum Foto/Röntgenleri"},
+    "Plan Foto/Rentgenləri": {"en": "Plan Photos/X-rays", "ru": "Фото/рентгены плана",
+                               "tr": "Plan Foto/Röntgenleri"},
+    "Müalicə Foto/Rentgenləri": {"en": "Treatment Photos/X-rays",
+                                  "ru": "Фото/рентгены лечения",
+                                  "tr": "Tedavi Foto/Röntgenleri"},
 }
 
 # hər dildəki mətndən (az/en/ru/tr — hansı hazırda ekranda olur-olsun) eyni girişə
@@ -1149,6 +1199,16 @@ def _foto_ilk_dis(dosya_adi):
     nömrələmə (#36 -> #36.1 -> #36.2) bu əsas nömrəyə görə aparılır."""
     nos = _foto_dis_nomreleri(dosya_adi)
     return nos[0] if nos else None
+
+_GECERSIZ_DOSYA_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+def _dosya_adi_temizle(ad):
+    """Verilmiş adı Windows fayl/qovluq adı olaraq işlənə bilən formaya salır
+    (export funksiyaları üçün — bax _pasient_export_qovluga/_pasient_export_pdf)."""
+    ad = (ad or "").strip().lstrip("#").strip()
+    ad = _GECERSIZ_DOSYA_RE.sub("_", ad)
+    ad = ad.rstrip(" .")
+    return ad or "fayl"
 
 AZ_BIRLIK = {"bir": 1, "iki": 2, "üç": 3, "uc": 3, "dörd": 4, "dord": 4,
              "beş": 5, "bes": 5, "altı": 6, "alti": 6, "yeddi": 7,
@@ -2494,7 +2554,6 @@ def _stat_line_chart(points, color, width=720, height=260,
 
 def get_map_photo(tedaviler, dis_tasi=False, secili=None, band_lbl="Diş Daşı Təmizliyi",
                   ilkin=False, secili_cok=None, not_disler=None):
-    S = _MS
     states = {}
     for k, v in tedaviler.items():
         try:
@@ -2510,6 +2569,29 @@ def get_map_photo(tedaviler, dis_tasi=False, secili=None, band_lbl="Diş Daşı 
     if key in _img_cache: return _img_cache[key]
     if len(_img_cache) > 48: _img_cache.clear()
 
+    img = _m_build_map_pil(tedaviler, dis_tasi=dis_tasi, secili=secili, band_lbl=band_lbl,
+                           ilkin=ilkin, secili_cok=secili_cok, not_disler=not_disler)
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    photo = tk.PhotoImage(data=base64.b64encode(buf.read()))
+    _img_cache[key] = photo
+    return photo
+
+def _m_build_map_pil(tedaviler, dis_tasi=False, secili=None, band_lbl="Diş Daşı Təmizliyi",
+                     ilkin=False, secili_cok=None, not_disler=None):
+    """get_map_photo-nun təmiz PIL-rendering nüvəsi — tk.PhotoImage keşindən/
+    çevrilməsindən asılı olmadan birbaşa PIL Image qaytarır (PDF/fayl export kimi
+    Tk-dən kənar istifadə üçün, bax _pasient_export_pdf)."""
+    S = _MS
+    states = {}
+    for k, v in tedaviler.items():
+        try:
+            n = int(k)
+        except (TypeError, ValueError):
+            continue
+        states[n] = normalize_state(v)
+    not_set = set(not_disler) if not_disler else set()
     img = _m_base_img()
     d = ImageDraw.Draw(img)
     bos = {"tac": None, "kanal": False, "kron": False, "curuk": [], "dolgu": []}
@@ -2637,12 +2719,7 @@ def get_map_photo(tedaviler, dis_tasi=False, secili=None, band_lbl="Diş Daşı 
             lx += _m_chip(d, lx, ycen, name, colr, c) + 8 * K * S
 
     img = img.resize((MAP_W, MAP_H), Image.LANCZOS)
-    buf = BytesIO()
-    img.save(buf, format="PNG")
-    buf.seek(0)
-    photo = tk.PhotoImage(data=base64.b64encode(buf.read()))
-    _img_cache[key] = photo
-    return photo
+    return img
 
 _OCC_HW, _OCC_HH = 37 * _MF, 28 * _MF   # oklüzal ovalin yaklaşık yarı-boyutları (hit-test için)
 _OCC_CY = 37   # ovalin mantıksal dikey merkezi (kutu 9..65 → orta 37)
@@ -4776,6 +4853,11 @@ class DentalApp(ctk.CTk):
         menu.add_command(label=f"💾  {t('Hastayı Kaydet')}",
                           command=lambda: self._hasta_kaydet_hizli(hid))
         menu.add_separator()
+        menu.add_command(label=f"📁  {t('Qovluğa Export Et (Foto/Rentgen)')}",
+                          command=lambda: self._pasient_export_qovluga(hid))
+        menu.add_command(label=f"📄  {t('PDF Hesabat Yarat')}",
+                          command=lambda: self._pasient_export_pdf(hid))
+        menu.add_separator()
         menu.add_command(label=f"🗑  {t('Hastayı Sil')}",
                           foreground="red",
                           command=lambda: self._hasta_sil(hid))
@@ -6396,6 +6478,227 @@ class DentalApp(ctk.CTk):
         else:
             tkinter.messagebox.showinfo(
                 t("Kaydedildi"), f"'{ad}' yedəkləndi:\n{self._BXD_BASE}")
+
+    # ── Pasient Export (qovluğa foto/rentgen, və ya tam PDF hesabat) ───────────
+
+    def _pasient_curuk_statistika(self, vaka):
+        """İlkin Vəziyyətdə qeyd olunmuş çürük səthlərini Black sinifləşdirməsinə
+        uyğun qruplaşdırır: Mesial+Distal (approksimal) bir statistika, Oklüzal
+        ayrıca (bax SINIF_YUZEYLER — klinika-geneli Statistika bölməsindəki eyni
+        qayda). Hər səth bir dəfə sayılır (bir dişdə həm M, həm D varsa — 2)."""
+        sayac = Counter()
+        for durum in vaka.get("ilkin", {}).values():
+            ns = normalize_state(durum)
+            for y in ns["curuk"]:
+                sayac[y] += 1
+        md = sayac.get("M", 0) + sayac.get("D", 0)
+        o = sayac.get("O", 0)
+        return md, o
+
+    def _pasient_export_qovluga(self, hid):
+        """Sağ tık → Export → Qovluğa: pasientin bütün foto (İlkin/Plan/Müalicə)
+        və rentgenlərini seçilən qovluqda ayrı alt-qovluqlarda JPEG olaraq saxlayır."""
+        import tkinter.filedialog as fd, tkinter.messagebox as mb
+        h = self.hastalar.get(hid)
+        if not h:
+            return
+        fotolar = []   # (bölmə etiketi, obyekt)
+        for vaka in h.get("vakalar", {}).values():
+            for key, etiket in (("fotolar_ilkin", t("İlkin")), ("fotolar_plan", t("Plan")),
+                                 ("fotolar_tedavi", t("Müalicə"))):
+                for f in vaka.get(key, []) or []:
+                    fotolar.append((etiket, f))
+        rentgenler = h.get("rontgenler", []) or []
+        if not fotolar and not rentgenler:
+            mb.showinfo(t("Export"), t("Bu pasientdə heç bir foto/rentgen yoxdur."))
+            return
+
+        qovluq = fd.askdirectory(title=t("Export Qovluğu Seçin"))
+        if not qovluq:
+            return
+        hedef = os.path.join(qovluq, f"{_dosya_adi_temizle(h.get('ad', 'Pasient'))}_{hid}")
+        os.makedirs(os.path.join(hedef, "Fotolar"), exist_ok=True)
+        if rentgenler:
+            os.makedirs(os.path.join(hedef, "Rentgenler"), exist_ok=True)
+
+        sayac, xetalar = 0, []
+        for i, (etiket, f) in enumerate(fotolar, start=1):
+            try:
+                data = self._img_bytes(f)
+            except Exception as exc:
+                xetalar.append(f"{f.get('dosya', '?')}: {exc}")
+                continue
+            ad = _dosya_adi_temizle(f.get("dosya") or f"foto_{i}")
+            with open(os.path.join(hedef, "Fotolar", f"{etiket}_{ad}_{i}.jpg"), "wb") as out:
+                out.write(data)
+            sayac += 1
+        for i, r in enumerate(rentgenler, start=1):
+            try:
+                data = self._img_bytes(r)
+            except Exception as exc:
+                xetalar.append(f"{r.get('dosya', '?')}: {exc}")
+                continue
+            ad = _dosya_adi_temizle(r.get("dosya") or f"rentgen_{i}")
+            with open(os.path.join(hedef, "Rentgenler", f"{ad}_{i}.jpg"), "wb") as out:
+                out.write(data)
+            sayac += 1
+
+        mesaj = f"{sayac} {t('fayl export olundu')}:\n{hedef}"
+        if xetalar:
+            mesaj += "\n\n" + t("Yüklənmədi") + ":\n" + "\n".join(xetalar[:5])
+        mb.showinfo(t("Export Edildi"), mesaj)
+
+    def _pasient_export_pdf(self, hid):
+        """Sağ tık → Export → PDF: pasientin diş xəritələri (İlkin/Plan/Müalicə),
+        çürük statistikası və bütün foto/rentgenlərini tək bir PDF hesabatında
+        toplayır (bax _pdf_hesabat_qur)."""
+        import tkinter.filedialog as fd, tkinter.messagebox as mb
+        h = self.hastalar.get(hid)
+        if not h:
+            return
+        vakalar = h.get("vakalar", {})
+        if not vakalar:
+            mb.showinfo(t("Export"), t("Bu pasientdə heç bir vaka yoxdur."))
+            return
+        vid = self.aktif_vid if (hid == self.aktif_hid and self.aktif_vid in vakalar) \
+            else next(iter(vakalar))
+        vaka = vakalar[vid]
+
+        yol = fd.asksaveasfilename(
+            title=t("PDF Hesabat Saxla"), defaultextension=".pdf",
+            initialfile=f"{_dosya_adi_temizle(h.get('ad', 'Pasient'))}_hesabat.pdf",
+            filetypes=[("PDF", "*.pdf")])
+        if not yol:
+            return
+        try:
+            self._pdf_hesabat_qur(h, vaka, yol)
+        except Exception as exc:
+            mb.showerror(t("Xəta"), f"PDF yaradıla bilmədi:\n{exc}")
+            return
+        mb.showinfo(t("Export Edildi"), f"{t('PDF hesabat saxlanıldı')}:\n{yol}")
+
+    def _pdf_hesabat_qur(self, h, vaka, yol):
+        """`_pasient_export_pdf`-in çağırdığı, saf PIL ilə çoxsəhifəli PDF
+        yaradan nüvə: məlumat+statistika səhifəsi, 3 diş xəritəsi səhifəsi,
+        sonra foto/rentgen qrid səhifələri (bölməyə görə qruplaşdırılmış)."""
+        PW, PH, PAD = 1240, 1754, 60   # A4 @ 150dpi
+        NAVY, AKSENT, BOZ, XETT = (20, 28, 44), (47, 127, 242), (110, 120, 140), (222, 227, 235)
+        f_basliq = _mfont(32, bold=True)
+        f_alt = _mfont(22, bold=True)
+        f_etiket = _mfont(15, bold=True)
+        f_metin = _mfont(15)
+        f_kicik = _mfont(12)
+
+        sehifeler = []
+
+        def _yeni_sehife():
+            img = Image.new("RGB", (PW, PH), "white")
+            d = ImageDraw.Draw(img)
+            d.rectangle((0, 0, PW, 10), fill=AKSENT)
+            sehifeler.append(img)
+            return img, d
+
+        # ── Səhifə 1: pasient məlumatı + çürük statistikası ──
+        img, d = _yeni_sehife()
+        y = PAD
+        d.text((PAD, y), "Digipex — " + t("Pasient Hesabatı"), font=f_basliq, fill=NAVY)
+        y += 56
+        d.line((PAD, y, PW - PAD, y), fill=XETT, width=2)
+        y += 28
+
+        def _sahe(etiket, deyer):
+            nonlocal y
+            d.text((PAD, y), etiket, font=f_etiket, fill=BOZ)
+            d.text((PAD + 220, y), str(deyer) if deyer not in (None, "") else "—",
+                   font=f_metin, fill=NAVY)
+            y += 34
+
+        _sahe(t("Ad Soyad") + ":", h.get("ad", ""))
+        _sahe(t("Yaş") + ":", h.get("yas", ""))
+        _sahe(t("Cinsiyyət") + ":", t(dict(CINSIYET_SECENEKLERI).get(h.get("cinsiyet", ""), "—")))
+        _sahe(t("Şəhər") + ":", h.get("sheher", ""))
+        _sahe(t("Vaka") + ":", vaka.get("ad", ""))
+        _sahe(t("Vaka Tarixi") + ":", vaka.get("tarih", ""))
+        _sahe(t("Hesabat Tarixi") + ":", datetime.now().strftime("%d.%m.%Y %H:%M"))
+        y += 24
+
+        d.line((PAD, y, PW - PAD, y), fill=XETT, width=2)
+        y += 36
+        d.text((PAD, y), t("Çürük Statistikası"), font=f_alt, fill=NAVY)
+        y += 44
+        md, o = self._pasient_curuk_statistika(vaka)
+        d.text((PAD, y), f"{t('Approksimal (M/D)')}: {md}", font=f_metin, fill=NAVY)
+        y += 32
+        d.text((PAD, y), f"{t('Oklüzal (O)')}: {o}", font=f_metin, fill=NAVY)
+        y += 32
+        d.text((PAD, y), t("* Yalnız İlkin Vəziyyətdə qeyd olunmuş çürük səthlərinə əsasən."),
+               font=f_kicik, fill=BOZ)
+
+        # ── Diş xəritələri: İlkin / Plan / Müalicə — hər biri öz səhifəsində ──
+        xeriteler = [
+            (t("İlkin Vəziyyət"), vaka.get("ilkin", {}), True,
+             vaka.get("dis_tasi_temizligi_ilkin", False), t("Diş Daşı")),
+            (t("Plan"), vaka.get("plan", {}), False,
+             vaka.get("dis_tasi_temizligi_plan", False), t("Diş Daşı Təmizliyi")),
+            (t("Müalicə"), vaka.get("tedavi", {}), False,
+             vaka.get("dis_tasi_temizligi_tedavi", False), t("Diş Daşı Təmizliyi")),
+        ]
+        for basliq, tedaviler, ilkin, dis_tasi, band in xeriteler:
+            tedaviler_str = {str(k): v for k, v in tedaviler.items()}
+            xerite_img = _m_build_map_pil(tedaviler_str, dis_tasi=dis_tasi, ilkin=ilkin, band_lbl=band)
+            img, d = _yeni_sehife()
+            y = PAD
+            d.text((PAD, y), f"{t('Diş Xəritəsi')} — {basliq}", font=f_alt, fill=NAVY)
+            y += 50
+            oran = min((PW - 2 * PAD) / xerite_img.width, (PH - y - PAD) / xerite_img.height)
+            yeni_olcu = (round(xerite_img.width * oran), round(xerite_img.height * oran))
+            img.paste(xerite_img.resize(yeni_olcu, Image.LANCZOS), (PAD, y))
+
+        # ── Foto/rentgen qridləri: bölməyə görə ayrı başlıqlarla, 2x3 qrid ──
+        foto_bolmeleri = [
+            (t("İlkin Vəziyyət Foto/Rentgenləri"), vaka.get("fotolar_ilkin", []) or []),
+            (t("Plan Foto/Rentgenləri"), vaka.get("fotolar_plan", []) or []),
+            (t("Müalicə Foto/Rentgenləri"), vaka.get("fotolar_tedavi", []) or []),
+            (t("Rentgenlər"), h.get("rontgenler", []) or []),
+        ]
+        COLS, ROWS = 2, 3
+        HUCRE_W = (PW - 2 * PAD - (COLS - 1) * 24) // COLS
+        HUCRE_H = int(HUCRE_W * 0.72)
+
+        for basliq, liste in foto_bolmeleri:
+            if not liste:
+                continue
+            idx = 0
+            while idx < len(liste):
+                img, d = _yeni_sehife()
+                y0 = PAD
+                d.text((PAD, y0), basliq, font=f_alt, fill=NAVY)
+                y0 += 50
+                for r in range(ROWS):
+                    for c in range(COLS):
+                        if idx >= len(liste):
+                            break
+                        ob = liste[idx]
+                        idx += 1
+                        cx = PAD + c * (HUCRE_W + 24)
+                        cy = y0 + r * (HUCRE_H + 54)
+                        d.rectangle((cx, cy, cx + HUCRE_W, cy + HUCRE_H), outline=XETT, width=1)
+                        try:
+                            foto = Image.open(BytesIO(self._img_bytes(ob))).convert("RGB")
+                            foto_oran = min(HUCRE_W / foto.width, HUCRE_H / foto.height, 1.0)
+                            f_olcu = (max(1, round(foto.width * foto_oran)),
+                                      max(1, round(foto.height * foto_oran)))
+                            foto_k = foto.resize(f_olcu, Image.LANCZOS)
+                            px = cx + (HUCRE_W - f_olcu[0]) // 2
+                            py = cy + (HUCRE_H - f_olcu[1]) // 2
+                            img.paste(foto_k, (px, py))
+                        except Exception:
+                            d.text((cx + 10, cy + HUCRE_H // 2), t("Yüklənmədi"),
+                                   font=f_kicik, fill=BOZ)
+                        etiket = f"{ob.get('dosya', '')}  ·  {ob.get('tarih', '')}"
+                        d.text((cx, cy + HUCRE_H + 6), etiket[:60], font=f_kicik, fill=BOZ)
+
+        sehifeler[0].save(yol, "PDF", resolution=150.0, save_all=True, append_images=sehifeler[1:])
 
     def _hasta_yukle(self):
         """Import a .bxd patient file and add them to the current database."""
