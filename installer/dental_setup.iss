@@ -2,7 +2,7 @@
 ; Derleme: ISCC.exe dental_setup.iss  (çıktı: installer\BlueXDental_Setup.exe)
 
 #define AppName "Digipex"
-#define AppVersion "1.3.0"
+#define AppVersion "1.4.0"
 #define AppExe "dental_planlama.exe"
 
 [Setup]
